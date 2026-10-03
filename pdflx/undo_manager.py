@@ -72,6 +72,13 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
                 strip_test_rect = (strip_test.quad * mat).rect if mat else strip_test
                 try:
                     for d in page.get_drawings():
+                        if not mat:
+                            # Same rule as extraction: rejects table borders and
+                            # separators that merely pass under the text.
+                            if pdf_handler._is_underline_drawing(d, [(x0, x1, baseline)]):
+                                is_underlined = True
+                                break
+                            continue
                         d_rect = d.get('rect')
                         if d_rect and d_rect.intersects(strip_test_rect) and d_rect.height <= 3.5:
                             overlap = min(d_rect.x1, strip_test_rect.x1) - max(d_rect.x0, strip_test_rect.x0)

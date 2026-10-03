@@ -474,12 +474,23 @@ def _is_underline_drawing(drawing, baselines):
         if line_y is None or line_x0 is None or line_x1 is None:
             return False
 
-        for tx0, tx1, baseline in baselines:
+        for entry in baselines:
+            tx0, tx1, baseline = entry[0], entry[1], entry[2]
+            # Optional 4th/5th items: extent of the whole text line the run
+            # belongs to, used for the overhang test below.
+            lx0, lx1 = (entry[3], entry[4]) if len(entry) >= 5 else (tx0, tx1)
             if abs(line_y - (baseline + 1.5)) <= 2.5:
                 overlap = min(line_x1, tx1) - max(line_x0, tx0)
                 text_width = max(0.1, tx1 - tx0)
-                if overlap >= min(4.0, text_width * 0.4):
-                    return True
+                if overlap < min(4.0, text_width * 0.4):
+                    continue
+                # A real underline hugs its text. A rule that sticks out well
+                # past the text line (table row border, separator) is not one.
+                line_width = max(0.1, lx1 - lx0)
+                tol = max(4.0, line_width * 0.15)
+                if line_x0 < lx0 - tol or line_x1 > lx1 + tol:
+                    continue
+                return True
     except Exception:
         pass
     return False
@@ -638,8 +649,10 @@ def extract_editable_text(doc, page_index):
                         editable.original_rotation = editable.rotation
                         editable.page_number = page_index
                         if page_drawings:
+                            line_x0 = min(s["bbox"][0] for s in spans)
+                            line_x1 = max(s["bbox"][2] for s in spans)
                             for d in page_drawings:
-                                if _is_underline_drawing(d, [(bbox[0], bbox[2], orig_origin[1])]):
+                                if _is_underline_drawing(d, [(bbox[0], bbox[2], orig_origin[1], line_x0, line_x1)]):
                                     editable.is_underline = True
                                     break
                             for d in page_drawings:

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.1 — 2026-10-03
+
+- Fixed table borders just below a cell's text being mistaken for an underline. Editing
+  such text no longer erases part of the border or adds an underline to the text.
+
 ## 0.3 — 2026-10-03
 
 - One consistent design for every dialog: Cancel · Title · Action header bars, titled
