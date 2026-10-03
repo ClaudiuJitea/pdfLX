@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pdflx"
+description = "An open-source tool for editing content in PDF files on Linux"
+readme = "README.md"
+license = "GPL-3.0-or-later"
+license-files = ["LICENSE"]
+dynamic = ["version"]
+requires-python = ">=3.10"
+dependencies = [
+    "PyMuPDF>=1.26.0",
+    "numpy",
+    "Pillow",
+    "pygobject",
+    "pdf2docx>=0.5.13",
+    "pyHanko>=0.25"
+]
+
+[project.urls]
+Homepage = "https://github.com/ClaudiuJitea/pdfLX"
+Issues = "https://github.com/ClaudiuJitea/pdfLX/issues"
+
+[tool.setuptools]
+packages = ["pdflx", "pdflx.ops", "pdflx.features"]
+
+[tool.setuptools.dynamic]
+version = {attr = "pdflx.constants.APP_VERSION"}
+
+[project.gui-scripts]
+pdflx = "pdflx.main:main"
+
+[project.scripts]
+pdflx-cli = "pdflx.cli:main"
+
+[tool.setuptools.package-data]
+pdflx = ["COPYING", "style.css", "img/*.svg", "img/*.png", "icons/hicolor/index.theme", "icons/hicolor/scalable/actions/*.svg", "icons/hicolor/scalable/apps/*.svg"]

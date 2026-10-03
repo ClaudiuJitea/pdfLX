@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=pdfLX
+Comment=Edit text content in PDF files
+Exec=pdflx %F
+Icon=org.pdflx.Editor
+Terminal=false
+Categories=Office;Graphics;GTK;
+Keywords=PDF;Editor;Text;pdfLX;
+MimeType=application/pdf;
+StartupNotify=true
+StartupWMClass=org.pdflx.Editor

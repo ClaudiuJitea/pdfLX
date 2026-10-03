@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>org.pdflx.Editor</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>pdfLX</name>
+  <summary>Edit, annotate, and export PDF documents</summary>
+  <description><p>A focused workspace for PDF documents on Linux. Edit text and images, organize pages, draw shapes and highlights, and export documents.</p></description>
+  <url type="homepage">https://github.com/ClaudiuJitea/pdfLX</url>
+  <url type="bugtracker">https://github.com/ClaudiuJitea/pdfLX/issues</url>
+  <launchable type="desktop-id">org.pdflx.Editor.desktop</launchable>
+  <content_rating type="oars-1.1" />
+  <releases><release version="0.3" date="2026-10-03"><description><p>A consistent dialog design, a new print dialog with live preview, a rebuilt image inspector, and a redesigned stamp designer with templates.</p></description></release><release version="0.2" date="2026-10-02"><description><p>Grouped menus, page and protection tools, signature verification, conversion and export, review and form improvements, authoring, viewer layouts, crash recovery, and a command-line tool.</p></description></release><release version="0.1" date="2026-09-30"><description><p>Initial pdfLX release with refreshed document controls, tool icons, color selectors, and application branding.</p></description></release></releases>
+</component>

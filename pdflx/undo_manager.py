@@ -1,0 +1,837 @@
+import copy
+import re
+from functools import wraps
+from .pdf_state import PdfState
+try:
+    import pymupdf as fitz
+except ImportError:
+    import fitz
+from . import pdf_handler
+from .models import EditableText, EditableShape, EditableStroke, EditableImage
+from .i18n import _
+import logging
+logger = logging.getLogger(__name__)
+
+def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=None):
+    """Redact original object strictly from snapshot without affecting any other objects."""
+    if getattr(target_object, 'is_new', True) or getattr(target_object, '_ghost_redacted', False):
+        return
+
+    pdf_handler.restore_page_from_snapshot(window.doc, page_num)
+
+    props = properties_to_clear or {}
+    orig_bbox = props.get('bbox', getattr(target_object, 'original_bbox', target_object.bbox))
+    rot = props.get('rotation', getattr(target_object, 'original_rotation', getattr(target_object, 'rotation', 0.0)))
+
+    if isinstance(target_object, (EditableShape, EditableStroke)):
+        sw = props.get('stroke_width', getattr(target_object, 'stroke_width', 2.0))
+        pad = max(sw / 2.0 + 1.5, 2.0)
+        x0, y0, x1, y1 = orig_bbox
+        redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+    elif isinstance(target_object, EditableImage):
+        x0, y0, x1, y1 = orig_bbox
+        redact_rect = fitz.Rect(x0 - 1.0, y0 - 1.0, x1 + 1.0, y1 + 1.0)
+    else:
+        redact_rect = fitz.Rect(orig_bbox)
+
+    cx = (orig_bbox[0] + orig_bbox[2]) / 2.0
+    cy = (orig_bbox[1] + orig_bbox[3]) / 2.0
+    mat = pdf_handler.get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
+
+    applied_rects = []
+    if mat:
+        applied_rects.append((redact_rect.quad * mat).rect)
+    else:
+        applied_rects.append(redact_rect)
+
+    try:
+        page = window.doc.load_page(page_num)
+
+        # Underline and strikethrough strip check for text
+        strip_rects = []
+        is_underlined = False
+        is_strikethrough = False
+        if isinstance(target_object, EditableText):
+            is_underlined = (
+                getattr(target_object, 'is_underline', False)
+                or props.get('is_underline', False)
+                or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', getattr(target_object, 'text', '')))
+                or bool(re.search(r'(https?://[^\s]+|www\.[^\s]+)', props.get('text', '')))
+            )
+            is_strikethrough = (
+                getattr(target_object, 'is_strikethrough', False)
+                or props.get('is_strikethrough', False)
+            )
+            x0, y0, x1, y1 = orig_bbox
+            baseline = props.get('baseline', getattr(target_object, 'original_baseline', getattr(target_object, 'baseline', y1)))
+            font_sz = props.get('font_size', getattr(target_object, 'font_size', 12.0))
+            line_height = font_sz * 1.2
+            
+            if not is_underlined:
+                strip_test = fitz.Rect(x0 - 2.0, baseline - 1.0, x1 + 2.0, baseline + 3.0)
+                strip_test_rect = (strip_test.quad * mat).rect if mat else strip_test
+                try:
+                    for d in page.get_drawings():
+                        d_rect = d.get('rect')
+                        if d_rect and d_rect.intersects(strip_test_rect) and d_rect.height <= 3.5:
+                            overlap = min(d_rect.x1, strip_test_rect.x1) - max(d_rect.x0, strip_test_rect.x0)
+                            if overlap >= min(4.0, (x1 - x0) * 0.4):
+                                is_underlined = True
+                                break
+                except Exception:
+                    pass
+
+            if not is_strikethrough:
+                strike_test = fitz.Rect(x0 - 2.0, baseline - (font_sz * 0.3) - 2.0, x1 + 2.0, baseline - (font_sz * 0.3) + 2.0)
+                strike_test_rect = (strike_test.quad * mat).rect if mat else strike_test
+                try:
+                    for d in page.get_drawings():
+                        d_rect = d.get('rect')
+                        if d_rect and d_rect.intersects(strike_test_rect) and d_rect.height <= 3.5:
+                            overlap = min(d_rect.x1, strike_test_rect.x1) - max(d_rect.x0, strike_test_rect.x0)
+                            if overlap >= min(4.0, (x1 - x0) * 0.4):
+                                is_strikethrough = True
+                                break
+                except Exception:
+                    pass
+
+            text_val = props.get('text', getattr(target_object, 'text', ''))
+            lines = text_val.split('\n')
+            if is_underlined:
+                for i in range(len(lines)):
+                    s_rect = fitz.Rect(x0, baseline + (i * line_height) - 0.5, x1, baseline + (i * line_height) + 2.5)
+                    strip_rects.append(s_rect)
+                    if mat:
+                        applied_rects.append((s_rect.quad * mat).rect)
+                    else:
+                        applied_rects.append(s_rect)
+
+            if is_strikethrough:
+                for i in range(len(lines)):
+                    st_rect = fitz.Rect(x0, baseline + (i * line_height) - (font_sz * 0.3) - 1.0, x1, baseline + (i * line_height) - (font_sz * 0.3) + 1.0)
+                    strip_rects.append(st_rect)
+                    if mat:
+                        applied_rects.append((st_rect.quad * mat).rect)
+                    else:
+                        applied_rects.append(st_rect)
+
+        # Apply redaction ONLY for target_object
+        if mat:
+            page.add_redact_annot(redact_rect.quad * mat)
+        else:
+            page.add_redact_annot(redact_rect)
+
+        # Execute redactions strictly isolated by object type
+        if isinstance(target_object, EditableText):
+            # Only redact text, NEVER redact graphics or images
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=0, text=0)
+
+            # If underline strip exists, redact only vector graphics for the strip, NEVER text
+            if strip_rects:
+                for s_rect in strip_rects:
+                    if mat:
+                        page.add_redact_annot(s_rect.quad * mat)
+                    else:
+                        page.add_redact_annot(s_rect)
+                try:
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
+                except Exception as error:
+                    # A failed erase leaves the old appearance under the edited object.
+                    logger.warning("Could not erase previous object appearance on page %s: %s", page_num, error)
+
+            # Check other EditableText on the same page ONLY if PyMuPDF physically destroyed its text
+            for other in getattr(window, 'editable_texts', []):
+                if other is not target_object and getattr(other, 'page_number', None) == page_num:
+                    if getattr(other, '_ghost_redacted', False):
+                        continue
+                    if hasattr(other, 'bbox') and other.bbox:
+                        ox0, oy0, ox1, oy1 = other.bbox
+                        other_rect = fitz.Rect(ox0 - 0.5, oy0 - 0.5, ox1 + 0.5, oy1 + 0.5)
+                        orot = getattr(other, 'original_rotation', getattr(other, 'rotation', 0.0))
+                        if orot != 0.0:
+                            ocx = (ox0 + ox1) / 2.0
+                            ocy = (oy0 + oy1) / 2.0
+                            omat = pdf_handler.get_rotation_matrix(ocx, ocy, orot)
+                            other_rect = (other_rect.quad * omat).rect
+                        intersects_any = any(ar.intersects(other_rect) for ar in applied_rects)
+                        if intersects_any:
+                            expected_text = getattr(other, 'original_text', getattr(other, 'text', '')).strip()
+                            if expected_text:
+                                clip_text = page.get_text("text", clip=other_rect).strip()
+                                norm_expected = "".join(expected_text.split())
+                                norm_clip = "".join(clip_text.split())
+                                if norm_expected not in norm_clip:
+                                    other._ghost_redacted = True
+
+        elif isinstance(target_object, (EditableShape, EditableStroke)):
+            # Only redact vector graphics, NEVER redact text or images (text=1 preserves text!)
+            try:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
+            except Exception:
+                page.apply_redactions()
+
+            # Check ONLY other shapes and strokes for vector clipping
+            other_graphics = [s for s in getattr(window, 'editable_shapes', []) if s is not target_object and getattr(s, 'page_number', None) == page_num]
+            other_graphics += [st for st in getattr(window, 'editable_strokes', []) if st is not target_object and getattr(st, 'page_number', None) == page_num]
+            for other in other_graphics:
+                if hasattr(other, 'bbox') and other.bbox:
+                    ox0, oy0, ox1, oy1 = other.bbox
+                    opad = max(getattr(other, 'stroke_width', 2.0) / 2.0, 1.0)
+                    other_rect = fitz.Rect(ox0 - opad, oy0 - opad, ox1 + opad, oy1 + opad)
+                    orot = getattr(other, 'rotation', 0.0)
+                    if orot != 0.0:
+                        ocx = (ox0 + ox1) / 2.0
+                        ocy = (oy0 + oy1) / 2.0
+                        omat = pdf_handler.get_rotation_matrix(ocx, ocy, orot)
+                        other_rect = (other_rect.quad * omat).rect
+                    for ar in applied_rects:
+                        if ar.intersects(other_rect):
+                            other._ghost_redacted = True
+                            break
+
+        elif isinstance(target_object, EditableImage):
+            # Only redact image, NEVER redact text or graphics
+            page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
+
+            for other in getattr(window, 'editable_images', []):
+                if other is not target_object and getattr(other, 'page_number', None) == page_num:
+                    if hasattr(other, 'bbox') and other.bbox:
+                        other_rect = fitz.Rect(other.bbox)
+                        for ar in applied_rects:
+                            if ar.intersects(other_rect):
+                                other._ghost_redacted = True
+                                break
+
+        # Clean old links
+        try:
+            for link in list(page.get_links()):
+                link_rect = fitz.Rect(link.get('from', (0, 0, 0, 0)))
+                for ar in applied_rects:
+                    if link_rect.intersects(ar):
+                        page.delete_link(link)
+                        break
+        except Exception as link_err:
+            print(f"Warning: could not delete old link: {link_err}")
+
+        window.doc.load_page(page_num)
+        pdf_handler.save_page_snapshot(window.doc, page_num, force=True)
+        pdf_handler.invalidate_page_cache(window.doc, page_num)
+        target_object._ghost_redacted = True
+    except Exception as e:
+        raise ValueError(f"Could not erase the original object on page {page_num+1}: {e}") from e
+
+class Command:
+    """Base class for undoable/redoable actions."""
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        for name in ('execute', 'undo'):
+            method = cls.__dict__.get(name)
+            if method is None:
+                continue
+            def atomic(method):
+                @wraps(method)
+                def run(self, *args, **kwargs):
+                    nested = getattr(self.window, '_command_depth', 0)
+                    backup = PdfState(self.window) if not nested else None
+                    self.window._command_depth = nested + 1
+                    self._failed = False
+                    try:
+                        result = method(self, *args, **kwargs)
+                        if result is False:
+                            raise ValueError('The edit could not be applied.')
+                        return result
+                    except Exception as error:
+                        self._failed = True
+                        if backup:
+                            backup.restore(self.window)
+                            if method.__name__ == 'execute' and hasattr(self, 'old_properties'):
+                                self.target_object.__dict__.update(copy.deepcopy(self.old_properties))
+                            elif method.__name__ == 'execute' and hasattr(self,'old_states'):
+                                for obj,state in zip(self.objects,self.old_states):
+                                    obj.__dict__.update(copy.deepcopy(state))
+                            members=[obj for name in ('editable_texts','editable_shapes','editable_images','editable_strokes')
+                                     for obj in getattr(self.window,name,[])]
+                            for name in ('selected_text','selected_shape','selected_image','selected_stroke'):
+                                if getattr(self.window,name,None) not in members:
+                                    setattr(self.window,name,None)
+                            if getattr(error, 'propagate', False):
+                                # The caller explains the failure (e.g. a form value a script rejected).
+                                raise
+                            if hasattr(self.window, '_report_command_error'):
+                                self.window._report_command_error(str(error))
+                            else:
+                                self.window.status_label.set_text(str(error))
+                            return False
+                        raise
+                    finally:
+                        self.window._command_depth = nested
+                return run
+            setattr(cls, name, atomic(method))
+
+    def __init__(self, window):
+        """Initialise command with parent window context."""
+        self.window = window
+
+    def execute(self):
+        """Execute the command."""
+        raise NotImplementedError
+
+    def undo(self):
+        """Undo the command."""
+        raise NotImplementedError
+
+    def _erase_ghost_if_needed(self, target_object, page_num, properties_to_clear=None):
+        """Redact original object from snapshot if edited/moved."""
+        _perform_ghost_erasure(self.window, target_object, page_num, properties_to_clear=properties_to_clear)
+
+class UndoManager:
+    """Manager class that stores undo and redo action stacks."""
+    def __init__(self, window):
+        """Initialise undo and redo stacks."""
+        self.window = window
+        self.undo_stack = []
+        self.redo_stack = []
+        self._update_ui_callback = self.window._update_undo_redo_buttons
+
+    def add_command(self, command):
+        """Add a command to the undo stack and clear redo stack."""
+        if getattr(command, '_failed', False):
+            return
+        self.undo_stack.append(command)
+        self.redo_stack.clear()
+        self._update_ui_callback()
+
+    def undo(self):
+        """Undo the command."""
+        forms=getattr(self.window,'form_tools',None)
+        if forms and forms.pending and not forms.save_values():return
+        if hasattr(self.window,'commit_pending_format_change'):
+            self.window.commit_pending_format_change()
+        if not self.undo_stack:
+            return
+        command = self.undo_stack[-1]
+        self._show_command_page(command)
+        if command.undo() is False:
+            return
+        self.undo_stack.pop()
+        self.redo_stack.append(command)
+        self._update_ui_callback()
+        self.window.pdf_view.queue_draw()
+
+    def redo(self):
+        """Redo the command."""
+        forms=getattr(self.window,'form_tools',None)
+        if forms and forms.pending and not forms.save_values():return
+        if hasattr(self.window,'commit_pending_format_change'):
+            self.window.commit_pending_format_change()
+        if not self.redo_stack:
+            return
+        command = self.redo_stack[-1]
+        self._show_command_page(command)
+        if command.execute() is False:
+            return
+        self.redo_stack.pop()
+        self.undo_stack.append(command)
+        self._update_ui_callback()
+        self.window.pdf_view.queue_draw()
+
+    def _show_command_page(self, command):
+        if getattr(command, 'commands', None):
+            self._show_command_page(command.commands[0])
+            return
+        page = getattr(command, 'page_num', getattr(command, 'page_index', None))
+        if page is None:
+            page = getattr(getattr(command, 'target_object', None), 'page_number', None)
+        if page is None:
+            page = getattr(getattr(command, 'new_object', None), 'page_number', None)
+        if page is None:
+            page = getattr(getattr(command, 'deleted_object', None), 'page_number', None)
+        if page is not None and page != self.window.current_page_index and hasattr(self.window, '_load_page'):
+            self.window._load_page(page)
+
+    def clear(self):
+        """Clear all undo and redo history."""
+        self.undo_stack.clear()
+        self.redo_stack.clear()
+        self._update_ui_callback()
+
+class EditObjectCommand(Command):
+    """Command for object modifications (position, bounds, formatting, colors)."""
+    def __init__(self, window, target_object, old_properties, new_properties):
+        super().__init__(window)
+        self.target_object = target_object
+        self.old_properties = old_properties
+        self.new_properties = new_properties
+
+    def _erase_ghost_if_needed(self, page_num, properties_to_clear):
+        """Erase ghost if needed."""
+        _perform_ghost_erasure(self.window, self.target_object, page_num, properties_to_clear)
+
+    def _apply_properties_to_pdf(self, properties_to_apply, properties_to_clear):
+        page = self.target_object.page_number
+        self._erase_ghost_if_needed(page, properties_to_clear)
+        self.target_object.__dict__.update(copy.deepcopy(properties_to_apply))
+        self.target_object._ghost_redacted = True
+        success, error = pdf_handler.rebuild_page(
+            self.window.doc, page, self.window.editable_texts,
+            self.window.editable_shapes, self.window.editable_images,
+            all_strokes=getattr(self.window, 'editable_strokes', []))
+        if not success:
+            raise ValueError(error)
+        self.target_object.is_baked = True
+        return True
+
+    def _update_live_object(self, properties_to_apply):
+        """Update live object."""
+        self.target_object.__dict__.update(copy.deepcopy(properties_to_apply))
+        self.target_object.original_bbox = self.target_object.bbox
+        self.target_object.modified = False
+        self.target_object._ghost_redacted = True
+        self.window.document_modified = True
+
+    def execute(self):
+        """Execute the command."""
+        if self._apply_properties_to_pdf(self.new_properties, self.old_properties):
+            self._update_live_object(self.new_properties)
+            page_num = getattr(self.target_object, 'page_number', None)
+            if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(page_num)
+            self.window.status_label.set_text(_("change_applied"))
+            self.window.pdf_view.queue_draw()
+
+    def undo(self):
+        """Undo the command."""
+        if self._apply_properties_to_pdf(self.old_properties, self.new_properties):
+            self._update_live_object(self.old_properties)
+            page_num = getattr(self.target_object, 'page_number', None)
+            if page_num is not None and hasattr(self.window, '_refresh_thumbnail'):
+                self.window._refresh_thumbnail(page_num)
+            self.window.status_label.set_text(_("reverted"))
+            self.window.pdf_view.queue_draw()
+
+class AddTableCommand(Command):
+    """Insert or remove a table's native cells and text as one history entry."""
+    def __init__(self, window, objects):
+        super().__init__(window)
+        self.objects = list(objects)
+        self.page_num = self.objects[0].page_number
+
+    def _collection(self, obj):
+        return (self.window.editable_texts if isinstance(obj, EditableText)
+                else self.window.editable_shapes)
+
+    def _rebuild(self):
+        success, error = pdf_handler.rebuild_page(
+            self.window.doc, self.page_num, self.window.editable_texts,
+            self.window.editable_shapes, self.window.editable_images,
+            all_strokes=getattr(self.window, 'editable_strokes', []))
+        if not success:
+            raise ValueError(error)
+        self.window.document_modified = True
+        self.window._refresh_thumbnail(self.page_num)
+        self.window._update_ui_state()
+        self.window.pdf_view.queue_draw()
+
+    def execute(self):
+        for obj in self.objects:
+            collection = self._collection(obj)
+            if obj not in collection:
+                collection.append(obj)
+            obj.is_baked = True
+        try:
+            self._rebuild()
+        except Exception:
+            for obj in self.objects:
+                self._collection(obj).remove(obj)
+            self._rebuild()
+            raise
+        self.window.status_label.set_text(_("table_added"))
+
+    def undo(self):
+        for obj in self.objects:
+            collection = self._collection(obj)
+            if obj in collection:
+                collection.remove(obj)
+        table = getattr(self.window, 'selected_table', None)
+        if table and any(obj in self.objects for obj in table.objects):
+            self.window.selected_table = None
+        for selection in ('selected_text', 'selected_shape'):
+            if getattr(self.window, selection, None) in self.objects:
+                setattr(self.window, selection, None)
+        if getattr(self.window, 'pending_format_change_obj', None) in self.objects:
+            self.window.pending_format_change_obj = None
+            self.window.before_format_change_state = None
+        self._rebuild()
+        self.window.status_label.set_text(_("reverted"))
+
+
+class EditTableCommand(AddTableCommand):
+    """Commit a table transform with one rebuild and one undo entry."""
+    def __init__(self, window, objects, old_states, new_states):
+        super().__init__(window, objects)
+        self.old_states = copy.deepcopy(old_states)
+        self.new_states = copy.deepcopy(new_states)
+
+    def _apply(self, states):
+        previous = [copy.deepcopy(obj.__dict__) for obj in self.objects]
+        for obj, state in zip(self.objects, states):
+            obj.__dict__.clear()
+            obj.__dict__.update(copy.deepcopy(state))
+            obj.original_bbox = obj.bbox
+            obj.is_baked = True
+        try:
+            self._rebuild()
+        except Exception:
+            for obj, state in zip(self.objects, previous):
+                obj.__dict__.clear()
+                obj.__dict__.update(state)
+            self._rebuild()
+            raise
+
+    def execute(self):
+        self._apply(self.new_states)
+
+    def undo(self):
+        self._apply(self.old_states)
+
+
+class AddObjectCommand(Command):
+    """Command for newly added canvas objects."""
+    def __init__(self, window, new_object):
+        super().__init__(window)
+        self.new_object = new_object
+        self.is_text = isinstance(new_object, EditableText)
+        self.is_shape = isinstance(new_object, EditableShape)
+        self.is_stroke = isinstance(new_object, EditableStroke)
+        self.is_image = not (self.is_text or self.is_shape or self.is_stroke)
+
+    def _refresh_thumb(self):
+        """Refresh thumb."""
+        page_num = getattr(self.new_object, 'page_number', None)
+        if page_num is not None:
+            self.window._refresh_thumbnail(page_num)
+
+    def execute(self):
+        """Execute the command."""
+        if self.is_text:
+            if self.new_object not in self.window.editable_texts:
+                self.window.editable_texts.append(self.new_object)
+        elif self.is_shape:
+            if self.new_object not in self.window.editable_shapes:
+                self.window.editable_shapes.append(self.new_object)
+        elif self.is_stroke:
+            if not hasattr(self.window, 'editable_strokes'):
+                self.window.editable_strokes = []
+            if self.new_object not in self.window.editable_strokes:
+                self.window.editable_strokes.append(self.new_object)
+        else:
+            if self.new_object not in self.window.editable_images:
+                self.window.editable_images.append(self.new_object)
+                
+        self.new_object.is_baked = True
+        page_num = getattr(self.new_object, 'page_number', self.window.current_page_index)
+        strokes = getattr(self.window, 'editable_strokes', [])
+        success, error = pdf_handler.rebuild_page(
+            self.window.doc, page_num,
+            self.window.editable_texts,
+            self.window.editable_shapes,
+            self.window.editable_images,
+            all_strokes=strokes
+        )
+        if not success:
+            raise ValueError(error)
+        self._refresh_thumb()
+
+        self.window.document_modified = True
+        self.window.status_label.set_text(_("object_added"))
+        self.window._update_ui_state()
+        self.window.pdf_view.queue_draw()
+
+    def undo(self):
+        """Undo the command."""
+        if self.is_text and self.new_object in self.window.editable_texts:
+            self.window.editable_texts.remove(self.new_object)
+        elif self.is_shape and self.new_object in self.window.editable_shapes:
+            self.window.editable_shapes.remove(self.new_object)
+        elif self.is_stroke and hasattr(self.window, 'editable_strokes') and self.new_object in self.window.editable_strokes:
+            self.window.editable_strokes.remove(self.new_object)
+        elif self.is_image and self.new_object in self.window.editable_images:
+            self.window.editable_images.remove(self.new_object)
+
+        page_num = getattr(self.new_object, 'page_number', self.window.current_page_index)
+        strokes = getattr(self.window, 'editable_strokes', [])
+        success, error = pdf_handler.rebuild_page(
+            self.window.doc, page_num,
+            self.window.editable_texts,
+            self.window.editable_shapes,
+            self.window.editable_images,
+            all_strokes=strokes
+        )
+        if not success:
+            raise ValueError(error)
+
+        self.window.document_modified = True
+        self.window.status_label.set_text(_("reverted"))
+        self.window._refresh_thumbnail(page_num)
+        self.window.pdf_view.queue_draw()
+
+
+
+class DeleteObjectCommand(Command):
+    """Command for deleting canvas objects with restoration on undo."""
+    def __init__(self, window, deleted_object):
+        super().__init__(window)
+        self.deleted_object = deleted_object
+        self.is_text = isinstance(deleted_object, EditableText)
+        self.is_shape = isinstance(deleted_object, EditableShape)
+        self.is_stroke = isinstance(deleted_object, EditableStroke)
+
+    def execute(self):
+        """Execute the command."""
+        if self.is_text and self.deleted_object in self.window.editable_texts:
+            self.window.editable_texts.remove(self.deleted_object)
+        elif self.is_shape and self.deleted_object in self.window.editable_shapes:
+            self.window.editable_shapes.remove(self.deleted_object)
+        elif self.is_stroke and hasattr(self.window, 'editable_strokes') and self.deleted_object in self.window.editable_strokes:
+            self.window.editable_strokes.remove(self.deleted_object)
+        elif not self.is_text and not self.is_shape and not self.is_stroke and self.deleted_object in self.window.editable_images:
+            self.window.editable_images.remove(self.deleted_object)
+
+        page_num = getattr(self.deleted_object, 'page_number', self.window.current_page_index)
+        if page_num is not None:
+            self._erase_ghost_if_needed(self.deleted_object, page_num)
+            
+        strokes = getattr(self.window, 'editable_strokes', [])
+        success, error = pdf_handler.rebuild_page(
+            self.window.doc, page_num,
+            self.window.editable_texts,
+            self.window.editable_shapes,
+            self.window.editable_images,
+            all_strokes=strokes
+        )
+        if not success:
+            raise ValueError(error)
+
+        self.window.document_modified = True
+        self.window.status_label.set_text(_("object_deleted"))
+        self.window._refresh_thumbnail(page_num)
+        self.window.pdf_view.queue_draw()
+
+    def undo(self):
+        """Undo the command."""
+        if self.is_text and self.deleted_object not in self.window.editable_texts:
+            self.window.editable_texts.append(self.deleted_object)
+        elif self.is_shape and self.deleted_object not in self.window.editable_shapes:
+            self.window.editable_shapes.append(self.deleted_object)
+        elif self.is_stroke:
+            if not hasattr(self.window, 'editable_strokes'):
+                self.window.editable_strokes = []
+            if self.deleted_object not in self.window.editable_strokes:
+                self.window.editable_strokes.append(self.deleted_object)
+        elif not self.is_text and not self.is_shape and not self.is_stroke and self.deleted_object not in self.window.editable_images:
+            self.window.editable_images.append(self.deleted_object)
+
+        page_num = getattr(self.deleted_object, 'page_number', self.window.current_page_index)
+        strokes = getattr(self.window, 'editable_strokes', [])
+        success, error = pdf_handler.rebuild_page(
+            self.window.doc, page_num,
+            self.window.editable_texts,
+            self.window.editable_shapes,
+            self.window.editable_images,
+            all_strokes=strokes
+        )
+        if not success:
+            raise ValueError(error)
+
+        self.window.document_modified = True
+        self.window.status_label.set_text(_("delete_reverted"))
+        self.window._refresh_thumbnail(page_num)
+        self.window.pdf_view.queue_draw()
+
+class CompositeCommand(Command):
+    """Composite command executing multiple atomic actions in a single undo step."""
+    def __init__(self, window, commands):
+        super().__init__(window)
+        self.commands = commands
+        
+    def execute(self):
+        """Execute the command."""
+        for command in self.commands:
+            if command.execute() is False:
+                raise ValueError('A grouped edit failed.')
+            
+    def undo(self):
+        """Undo the command."""
+        for command in reversed(self.commands):
+            if command.undo() is False:
+                raise ValueError('A grouped undo failed.')
+
+class RotatePageCommand(Command):
+    """Command to rotate a page 90 degrees clockwise or counterclockwise with undo/redo."""
+    def __init__(self, window, page_index: int, angle_delta: int):
+        super().__init__(window)
+        self.page_index = page_index
+        self.angle_delta = angle_delta
+
+    def execute(self):
+        """Rotate page by angle_delta degrees and update display."""
+        success, _res = pdf_handler.rotate_page(self.window.doc, self.page_index, self.angle_delta)
+        if success:
+            self._apply_rotation_ui()
+
+    def undo(self):
+        """Revert page rotation by -angle_delta degrees and update display."""
+        success, _res = pdf_handler.rotate_page(self.window.doc, self.page_index, -self.angle_delta)
+        if success:
+            self._apply_rotation_ui()
+
+    def _apply_rotation_ui(self):
+        self.window.document_modified = True
+        if hasattr(self.window, '_refresh_thumbnail'):
+            self.window._refresh_thumbnail(self.page_index)
+        if hasattr(self.window, 'current_page_index') and self.window.current_page_index == self.page_index:
+            try:
+                page = self.window.doc.load_page(self.page_index)
+                zoom = getattr(self.window, 'zoom_level', 1.0)
+                self.window.current_pdf_page_width = int(page.rect.width * zoom)
+                self.window.current_pdf_page_height = int(page.rect.height * zoom)
+                if hasattr(self.window, 'pdf_view'):
+                    self.window.pdf_view.set_content_width(self.window.current_pdf_page_width)
+                    self.window.pdf_view.set_content_height(self.window.current_pdf_page_height)
+            except Exception as e:
+                print(f"Warning updating page dimensions on rotation: {e}")
+            if hasattr(self.window, '_update_rotation_controls'):
+                selected_obj = getattr(self.window, 'get_selected_object', lambda: None)()
+                self.window._update_rotation_controls(selected_obj)
+            if hasattr(self.window, 'pdf_view'):
+                self.window.pdf_view.queue_draw()
+            if hasattr(self.window, '_update_ui_state'):
+                self.window._update_ui_state()
+
+class RotateObjectCommand(Command):
+    """Command to rotate an object (text, image, shape, stroke) with full undo/redo."""
+    def __init__(self, window, target_object, old_rotation: float, new_rotation: float):
+        super().__init__(window)
+        self.target_object = target_object
+        self.old_rotation = float(old_rotation) % 360.0
+        self.new_rotation = float(new_rotation) % 360.0
+
+    def _apply_rotation(self, to_angle: float, from_angle: float):
+        """Bake the rotation into the PDF page and update live object and UI."""
+        page_num = getattr(self.target_object, 'page_number', None)
+        if page_num is not None and getattr(self.window, 'doc', None):
+            orig_rot = getattr(self.target_object, 'original_rotation', from_angle)
+            orig_bbox = getattr(self.target_object, 'original_bbox', getattr(self.target_object, 'bbox', None))
+            props_to_clear = {'rotation': orig_rot, 'bbox': orig_bbox}
+            self._erase_ghost_if_needed(self.target_object, page_num, properties_to_clear=props_to_clear)
+
+            temp_obj = copy.deepcopy(self.target_object)
+            if hasattr(temp_obj, 'set_rotation'):
+                temp_obj.set_rotation(to_angle)
+            else:
+                temp_obj.rotation = float(to_angle) % 360.0
+
+            strokes = getattr(self.window, 'editable_strokes', [])
+            success, error = pdf_handler.rebuild_page(
+                self.window.doc, page_num,
+                getattr(self.window, 'editable_texts', []),
+                getattr(self.window, 'editable_shapes', []),
+                getattr(self.window, 'editable_images', []),
+                exclude_obj=self.target_object,
+                all_strokes=strokes
+            )
+            if not success:
+                raise ValueError(error)
+            success, msg = pdf_handler.apply_object_edit(self.window.doc, temp_obj)
+            if success:
+                self.target_object.is_baked = True
+                self.target_object._ghost_redacted = True
+                if hasattr(self.window, '_refresh_thumbnail'):
+                    self.window._refresh_thumbnail(page_num)
+            else:
+                raise ValueError(msg or 'Could not rotate the object.')
+
+        if hasattr(self.target_object, 'set_rotation'):
+            self.target_object.set_rotation(to_angle)
+        else:
+            self.target_object.rotation = float(to_angle) % 360.0
+
+        self.window.document_modified = True
+        if getattr(self.window, 'selected_text', None) == self.target_object:
+            self.window.pending_format_change_obj = self.target_object
+            self.window.before_format_change_state = copy.deepcopy(self.target_object.__dict__)
+            if hasattr(self.window, '_update_text_format_controls'):
+                self.window._update_text_format_controls(self.target_object)
+        if hasattr(self.window, '_update_rotation_controls'):
+            self.window._update_rotation_controls(self.target_object)
+        if hasattr(self.window, '_update_ui_state'):
+            self.window._update_ui_state()
+        if hasattr(self.window, 'pdf_view'):
+            self.window.pdf_view.queue_draw()
+
+    def execute(self):
+        """Apply new rotation angle."""
+        self._apply_rotation(self.new_rotation, self.old_rotation)
+        if hasattr(self.window, 'status_label') and self.window.status_label:
+            self.window.status_label.set_text(_("status_object_rotation", f"{self.new_rotation:.1f}°"))
+
+    def undo(self):
+        """Revert back to old rotation angle."""
+        self._apply_rotation(self.old_rotation, self.new_rotation)
+        if hasattr(self.window, 'status_label') and self.window.status_label:
+            self.window.status_label.set_text(_("status_object_rotation", f"{self.old_rotation:.1f}°"))
+
+
+class DocumentMutationCommand(Command):
+    """Undo any document tool while retaining page models and object identities."""
+    def __init__(self, window, mutation, page_num=None, rebase_pages=()):
+        super().__init__(window)
+        self.mutation = mutation
+        self.page_num = window.current_page_index if page_num is None else page_num
+        self.rebase_pages = tuple(rebase_pages)
+        self.before = self.after = None
+
+    def _refresh(self):
+        self.window.document_modified = True
+        pdf_handler.invalidate_page_cache(self.window.doc)
+        if hasattr(self.window, '_clear_search'):
+            self.window._clear_search()
+        if hasattr(self.window, '_load_page'):
+            self.window._load_page(self.window.current_page_index, reload_objects=False)
+        for page in range(self.window.doc.page_count):
+            self.window._refresh_thumbnail(page)
+        self.window._update_ui_state()
+        self.window.pdf_view.queue_draw()
+
+    def execute(self):
+        if self.after is not None:
+            self.after.restore(self.window)
+        else:
+            self.before = PdfState(self.window)
+            for page in self.rebase_pages:
+                if (id(self.window.doc), page) in pdf_handler._page_snapshots:
+                    if not pdf_handler.restore_page_from_snapshot(self.window.doc, page):
+                        raise ValueError('Could not restore the original page.')
+            self.mutation()
+            for page in self.rebase_pages:
+                pdf_handler.save_page_snapshot(self.window.doc, page, force=True)
+                groups = getattr(self.window._active_session, 'page_objects', {}).get(page)
+                if groups:
+                    extractors = (pdf_handler.extract_editable_text,pdf_handler.extract_editable_shapes,
+                                  pdf_handler.extract_editable_images,pdf_handler.extract_editable_strokes)
+                    for group, extract in zip(groups,extractors):
+                        managed = [obj for obj in group if getattr(obj,'is_new',False) or getattr(obj,'_ghost_redacted',False)]
+                        originals,error = extract(self.window.doc,page)
+                        if error:
+                            raise ValueError(error)
+                        group[:] = originals + managed
+                    texts, shapes, images, strokes = groups
+                    success, error = pdf_handler.rebuild_page(self.window.doc, page, texts, shapes, images, all_strokes=strokes)
+                    if not success:
+                        raise ValueError(error)
+            self.after = PdfState(self.window)
+        self._refresh()
+
+    def undo(self):
+        self.before.restore(self.window)
+        self._refresh()

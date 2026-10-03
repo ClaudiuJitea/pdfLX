@@ -1,0 +1,2034 @@
+try:
+    import pymupdf as fitz
+except ImportError:
+    import fitz
+import numpy as np
+import cairo
+import io
+import os
+from pathlib import Path
+import math
+import subprocess
+import shutil
+import tempfile
+import traceback
+import re
+try:
+    from pdf2docx import Converter as Pdf2DocxConverter
+    HAS_PDF2DOCX = True
+except ImportError:
+    Pdf2DocxConverter = None
+    HAS_PDF2DOCX = False
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Gdk', '4.0')
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import GdkPixbuf, Gdk, Pango, PangoCairo
+from .models import EditableText, FLAG_BOLD, FLAG_ITALIC, EditableImage, EditableShape, EditableStroke
+from .utils import find_specific_font_variant, get_default_unicode_font_path
+from .i18n import _
+import logging
+logger = logging.getLogger(__name__)
+
+_cairo_page_cache = {}
+
+def invalidate_page_cache(doc=None, page_index=None):
+    """Invalidate cached Cairo page surfaces."""
+    global _cairo_page_cache
+    if doc is None:
+        _cairo_page_cache.clear()
+        _cairo_buffers.clear()
+        return
+    doc_id = id(doc)
+    if page_index is None:
+        keys_to_del = [k for k in _cairo_page_cache if k[0] == doc_id]
+    else:
+        keys_to_del = [k for k in _cairo_page_cache if k[0] == doc_id and k[1] == page_index]
+    for k in keys_to_del:
+        _cairo_page_cache.pop(k, None)
+        _cairo_buffers.pop(k, None)
+
+def rotate_point(x, y, cx, cy, angle_degrees):
+    """Rotate point (x, y) around pivot (cx, cy) by angle_degrees clockwise."""
+    if angle_degrees == 0:
+        return x, y
+    rad = math.radians(angle_degrees)
+    cos_a = math.cos(rad)
+    sin_a = math.sin(rad)
+    nx = cx + (x - cx) * cos_a - (y - cy) * sin_a
+    ny = cy + (x - cx) * sin_a + (y - cy) * cos_a
+    return nx, ny
+
+def get_rotation_matrix(cx, cy, angle_degrees):
+    """Return fitz.Matrix rotating around (cx, cy) by angle_degrees."""
+    t1 = fitz.Matrix(1, 0, 0, 1, -cx, -cy)
+    rot = fitz.Matrix(angle_degrees)
+    t2 = fitz.Matrix(1, 0, 0, 1, cx, cy)
+    return t1 * rot * t2
+
+def transform_point_page_rot(x: float, y: float, w: float, h: float, angle_delta: int):
+    """Transform a point (x, y) on a page of dimensions (w, h) when rotated by angle_delta degrees."""
+    delta = angle_delta % 360
+    if delta == 90:
+        return h - y, x
+    elif delta == 180:
+        return w - x, h - y
+    elif delta == 270:
+        return y, w - x
+    return x, y
+
+def transform_bbox_page_rot(bbox, w: float, h: float, angle_delta: int):
+    """Transform bounding box (x1, y1, x2, y2) on a page of dimensions (w, h) when rotated by angle_delta degrees."""
+    if not bbox:
+        return bbox
+    x1, y1, x2, y2 = bbox
+    delta = angle_delta % 360
+    if delta == 90:
+        return (h - y2, x1, h - y1, x2)
+    elif delta == 180:
+        return (w - x2, h - y2, w - x1, h - y1)
+    elif delta == 270:
+        return (y1, w - x2, y2, w - x1)
+    return (x1, y1, x2, y2)
+
+# Display-only colour treatment for reading; never written to the PDF.
+READER_MODES = ('normal', 'night', 'sepia', 'contrast')
+_reader_mode = 'normal'
+
+
+def set_reader_mode(mode):
+    global _reader_mode
+    if mode not in READER_MODES:
+        mode = 'normal'
+    if mode != _reader_mode:
+        _reader_mode = mode
+        invalidate_page_cache()
+
+
+def get_reader_mode():
+    return _reader_mode
+
+
+def apply_reader_mode(pix, mode=None):
+    """Recolour a rendered RGB pixmap in place for the active reader mode."""
+    mode = mode or _reader_mode
+    if mode == 'night':
+        pix.invert_irect()
+        pix.tint_with(0x101418, 0xD8DEE9)
+    elif mode == 'sepia':
+        pix.tint_with(0x3B2A1A, 0xF4ECD8)
+    elif mode == 'contrast':
+        pix.gamma_with(0.55)
+    return pix
+
+
+# Rendered surfaces are cached within a byte budget instead of a fixed count:
+# six pages at 8x zoom would otherwise hold close to a gigabyte.
+CACHE_BUDGET_BYTES = 320 * 1024 * 1024
+# Pages larger than this (in device pixels) are rendered only around the viewport.
+LARGE_PAGE_PIXELS = 3500 * 3500
+REGION_TILE = 1024
+_cairo_buffers = {}
+
+
+def _pixmap_to_surface(pix):
+    """Wrap an RGB pixmap as a Cairo RGB24 surface with a single numpy conversion pass.
+
+    The returned buffer backs the surface and must stay referenced as long as it.
+    Measured on an A4 page: 130 ms instead of 224 ms at 8x zoom, 1 ms instead of
+    9 ms at 100% (the previous path copied to bytes, a Pixbuf, then painted).
+    """
+    import sys
+    import numpy as np
+    height, width = pix.height, pix.width
+    source = np.frombuffer(pix.samples_mv, dtype=np.uint8).reshape(height, pix.stride)[:, :width * 3]
+    source = source.reshape(height, width, 3)
+    stride = cairo.ImageSurface.format_stride_for_width(cairo.FORMAT_RGB24, width)
+    buffer = np.empty((height, stride // 4, 4), dtype=np.uint8)
+    if sys.byteorder == 'little':  # Cairo RGB24 is native-endian 0xXXRRGGBB
+        buffer[:, :width, 0] = source[..., 2]
+        buffer[:, :width, 1] = source[..., 1]
+        buffer[:, :width, 2] = source[..., 0]
+    else:
+        buffer[:, :width, 1] = source[..., 0]
+        buffer[:, :width, 2] = source[..., 1]
+        buffer[:, :width, 3] = source[..., 2]
+    surface = cairo.ImageSurface.create_for_data(memoryview(buffer), cairo.FORMAT_RGB24, width, height, stride)
+    return surface, buffer
+
+
+def _cache_store(key, surface, buffer):
+    _cairo_page_cache[key] = surface
+    _cairo_buffers[key] = buffer
+    total = sum(item.nbytes for item in _cairo_buffers.values())
+    while total > CACHE_BUDGET_BYTES and len(_cairo_page_cache) > 1:
+        oldest = next(iter(_cairo_page_cache))
+        _cairo_page_cache.pop(oldest, None)
+        removed = _cairo_buffers.pop(oldest, None)
+        total -= removed.nbytes if removed is not None else 0
+
+
+def page_is_large(doc, page_index, zoom_level):
+    try:
+        rect = doc[page_index].rect
+    except Exception:
+        return False
+    return rect.width * rect.height * zoom_level * zoom_level > LARGE_PAGE_PIXELS
+
+
+def get_page_cairo_surface(doc, page_index, zoom_level):
+    """Get or render cached Cairo ImageSurface for the given page and zoom level."""
+    if not doc or not (0 <= page_index < doc.page_count):
+        return None
+
+    cache_key = (id(doc), page_index, round(float(zoom_level), 4), _reader_mode)
+    if cache_key in _cairo_page_cache:
+        surface = _cairo_page_cache.pop(cache_key)
+        _cairo_page_cache[cache_key] = surface  # most recently used last
+        return surface
+
+    try:
+        page = doc.load_page(page_index)
+        zoom_matrix = fitz.Matrix(zoom_level, zoom_level)
+        pix = page.get_pixmap(matrix=zoom_matrix, alpha=False)
+        apply_reader_mode(pix)
+        surface, buffer = _pixmap_to_surface(pix)
+        _cache_store(cache_key, surface, buffer)
+        return surface
+    except Exception as e:
+        logger.warning("Error creating cached page surface for page %s: %s", page_index, e)
+        return None
+
+
+def get_page_region_surface(doc, page_index, zoom_level, visible):
+    """Render only the tile-aligned part of a page that covers ``visible``.
+
+    ``visible`` is (x0, y0, x1, y1) in device pixels of the displayed page.
+    Returns (surface, x, y) where x/y is the region's offset on the page, or
+    None. Used for very large zoomed pages to bound memory and latency.
+    """
+    if not doc or not (0 <= page_index < doc.page_count):
+        return None
+    page = doc.load_page(page_index)
+    full_w, full_h = page.rect.width * zoom_level, page.rect.height * zoom_level
+    x0 = max(0, int(visible[0] // REGION_TILE) * REGION_TILE)
+    y0 = max(0, int(visible[1] // REGION_TILE) * REGION_TILE)
+    x1 = min(full_w, (int(visible[2] // REGION_TILE) + 1) * REGION_TILE)
+    y1 = min(full_h, (int(visible[3] // REGION_TILE) + 1) * REGION_TILE)
+    if x1 <= x0 or y1 <= y0:
+        return None
+    key = (id(doc), page_index, round(float(zoom_level), 4), _reader_mode, (x0, y0, x1, y1))
+    if key in _cairo_page_cache:
+        return _cairo_page_cache[key], x0, y0
+    try:
+        clip = fitz.Rect(x0, y0, x1, y1) / zoom_level  # visual page coordinates
+        pix = page.get_pixmap(matrix=fitz.Matrix(zoom_level, zoom_level), clip=clip, alpha=False)
+        apply_reader_mode(pix)
+        surface, buffer = _pixmap_to_surface(pix)
+        _cache_store(key, surface, buffer)
+        return surface, x0, y0
+    except Exception as e:
+        logger.warning("Error rendering page region %s: %s", page_index, e)
+        return None
+
+def _get_font_args_for_pymupdf(text_obj):
+    """Get the font args for pymupdf."""
+    font_arg = {}
+    font_to_embed_path = find_specific_font_variant(
+        text_obj.font_family_base,
+        text_obj.is_bold,
+        text_obj.is_italic
+    )
+
+    if font_to_embed_path:
+        try:
+            test_f = fitz.Font(fontfile=font_to_embed_path)
+            non_ascii_chars = [c for c in text_obj.text if ord(c) > 127]
+            missing = [c for c in non_ascii_chars if not test_f.has_glyph(ord(c))]
+            if missing:
+                fb_path = find_specific_font_variant("DejaVu Sans", text_obj.is_bold, text_obj.is_italic)
+                if fb_path and fb_path != font_to_embed_path:
+                    fb_f = fitz.Font(fontfile=fb_path)
+                    if all(fb_f.has_glyph(ord(c)) for c in missing if ord(c) < 0x10000):
+                        font_to_embed_path = fb_path
+                        logger.debug(f"FontHelper: Fallback to DejaVu Sans for symbols: {missing}")
+        except Exception as e:
+            logger.debug(f"FontHelper: Glyph check warning: {e}")
+
+        style_suffix = ""
+        if text_obj.is_bold: style_suffix += "Bold"
+        if text_obj.is_italic: style_suffix += "Italic"
+        if not style_suffix: style_suffix = "Regular"
+
+        safe_family_name = re.sub(r'\W+', '', text_obj.font_family_base or "UnknownFont")
+        internal_font_name = f"pdflx_{safe_family_name}_{style_suffix}"
+        
+        font_arg = {"fontfile": font_to_embed_path, "fontname": internal_font_name}
+        logger.debug(f"FontHelper: Using TTF: {font_to_embed_path} as '{internal_font_name}'")
+        return font_arg, None
+    else:
+        generic_unicode_font = get_default_unicode_font_path()
+        if generic_unicode_font:
+            internal_font_name = "pdfLXEditFont_GenericUnicode"
+            font_arg = {"fontfile": generic_unicode_font, "fontname": internal_font_name}
+            logger.debug(f"FontHelper: WARNING: Could not find specific TTF. Using generic fallback: {generic_unicode_font}")
+            return font_arg, None
+        else:
+            base14_name = text_obj.pdf_fontname_base14
+            if text_obj.is_bold and text_obj.is_italic: base14_name += "bo"
+            elif text_obj.is_bold: base14_name += "b"
+            elif text_obj.is_italic: base14_name += "i"
+            font_arg = {"fontname": base14_name}
+            logger.debug(f"FontHelper: CRITICAL WARNING: No TTF found. Falling back to Base 14 font: '{base14_name}'.")
+            if any(ord(c) > 127 for c in text_obj.text):
+                 return None, "Cannot save non-ASCII text: No suitable Unicode font found."
+            return font_arg, None
+
+def load_pdf_document(filepath, password=None):
+    """Load PDF document."""
+    try:
+        doc = fitz.open(filepath)
+        if doc.needs_pass:
+            if password is None:
+                doc.close()
+                return None, "password_required"
+            auth = doc.authenticate(password)
+            if not auth:
+                doc.close()
+                return None, "incorrect_password"
+            owner_access = bool(auth & 4)
+            doc.editor_can_edit = owner_access or bool(doc.permissions & fitz.PDF_PERM_MODIFY)
+            doc.editor_can_fill_forms = owner_access or bool(doc.permissions & fitz.PDF_PERM_FORM)
+            doc.editor_can_copy = owner_access or bool(doc.permissions & fitz.PDF_PERM_COPY)
+            doc.editor_can_print = owner_access or bool(doc.permissions & fitz.PDF_PERM_PRINT)
+        else:
+            doc.editor_can_edit = True
+            doc.editor_can_fill_forms = True
+            doc.editor_can_copy = True
+            doc.editor_can_print = True
+        doc.editor_password = password or ""
+        return doc, None
+    except Exception as e:
+        return None, f"Error opening PDF: {e}\nPath: {filepath}"
+
+def close_pdf_document(doc):
+    """Close PDF document."""
+    if doc:
+        try:
+            invalidate_page_cache(doc)
+            doc.close()
+        except Exception as e:
+            print(f"Error closing PDF document: {e}")
+
+def get_page_count(doc):
+    """Get the page count."""
+    return doc.page_count if doc else 0
+
+def generate_thumbnail(doc, page_index, target_width=150):
+    """Generate thumbnail."""
+    if not doc or not (0 <= page_index < doc.page_count):
+        return None
+    try:
+        page = doc.load_page(page_index)
+        
+        page_w = page.rect.width
+        if page_w == 0: 
+            page_w = 1 
+            
+        zoom_factor = target_width / page_w
+        matrix = fitz.Matrix(zoom_factor, zoom_factor)
+
+        pix = page.get_pixmap(matrix=matrix, alpha=False)
+        gdk_pixbuf = GdkPixbuf.Pixbuf.new_from_data(
+            pix.samples, GdkPixbuf.Colorspace.RGB, False, 8,
+            pix.width, pix.height, pix.stride
+        )
+        return gdk_pixbuf
+    except Exception as thumb_error:
+        print(f"Warning: Could not generate thumbnail for page {page_index+1}: {thumb_error}")
+        placeholder_pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, target_width, int(target_width * 1.414))
+        placeholder_pixbuf.fill(0xaaaaaaFF)
+        return placeholder_pixbuf
+
+def pixmap_to_cairo_surface(pix):
+    """Pixmap to cairo surface."""
+    data = None
+    fmt = None
+    stride = 0
+    data_ref = None
+
+    try:
+        if pix.alpha:
+            if pix.n != 4: return None, None
+            fmt = cairo.FORMAT_ARGB32
+            samples_np = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, 4))
+            bgra_data = np.zeros_like(samples_np)
+            bgra_data[..., 0] = samples_np[..., 2] # B
+            bgra_data[..., 1] = samples_np[..., 1] # G
+            bgra_data[..., 2] = samples_np[..., 0] # R
+            bgra_data[..., 3] = samples_np[..., 3] # A
+            data = bytearray(bgra_data.tobytes())
+            stride = pix.stride
+            data_ref = data
+
+        else:
+            if pix.n != 3: return None, None
+            bgra_data = np.zeros((pix.height, pix.width, 4), dtype=np.uint8)
+            try:
+                 rgb_view = np.frombuffer(pix.samples, dtype=np.uint8).reshape((pix.height, pix.width, 3))
+            except ValueError:
+                 rgb_view = np.frombuffer(pix.samples, dtype=np.uint8).copy().reshape((pix.height, pix.width, 3))
+
+            bgra_data[:, :, 0] = rgb_view[:, :, 2]  # Blue
+            bgra_data[:, :, 1] = rgb_view[:, :, 1]  # Green
+            bgra_data[:, :, 2] = rgb_view[:, :, 0]  # Red
+            bgra_data[:, :, 3] = 255                # Alpha
+            data = bgra_data.data 
+            fmt = cairo.FORMAT_ARGB32
+            stride = pix.width * 4 
+            data_ref = bgra_data 
+
+        if data is None: return None, None
+
+        surface = cairo.ImageSurface.create_for_data(data, fmt, pix.width, pix.height, stride)
+        return surface, data_ref
+
+    except Exception as e:
+        print(f"Error creating Cairo surface from pixmap: {e}")
+        return None, None
+
+
+def draw_page_to_cairo(cr, doc, page_index, zoom_level):
+    """Draw page to cairo using the cached surface."""
+    surf = get_page_cairo_surface(doc, page_index, zoom_level)
+    if surf:
+        cr.set_source_rgb(1.0, 1.0, 1.0)
+        cr.paint()
+        cr.set_source_surface(surf, 0, 0)
+        cr.paint()
+        return True, None
+    else:
+        cr.set_source_rgb(0.7, 0.7, 0.7)
+        cr.paint()
+        return False, "Failed to render page."
+
+
+def _get_page_text_baselines(page):
+    """Get list of (x0, x1, baseline) for all text lines on page."""
+    baselines = []
+    try:
+        text_dict = page.get_text("dict", flags=0)
+        for block in text_dict.get("blocks", []):
+            if block.get("type") == 0:
+                for line in block.get("lines", []):
+                    spans = line.get("spans", [])
+                    if spans:
+                        tx0 = min(s["bbox"][0] for s in spans)
+                        tx1 = max(s["bbox"][2] for s in spans)
+                        baseline = spans[0].get("origin", (0, line.get("bbox", [0, 0, 0, 0])[3]))[1]
+                        baselines.append((tx0, tx1, baseline))
+    except Exception:
+        pass
+    return baselines
+
+
+def _get_page_text_strikelines(page):
+    """Get list of (x0, x1, baseline, font_size) for all text lines on page."""
+    strikelines = []
+    try:
+        text_dict = page.get_text("dict", flags=0)
+        for block in text_dict.get("blocks", []):
+            if block.get("type") == 0:
+                for line in block.get("lines", []):
+                    spans = line.get("spans", [])
+                    if spans:
+                        tx0 = min(s["bbox"][0] for s in spans)
+                        tx1 = max(s["bbox"][2] for s in spans)
+                        baseline = spans[0].get("origin", (0, line.get("bbox", [0, 0, 0, 0])[3]))[1]
+                        font_size = spans[0].get("size", 11.0)
+                        strikelines.append((tx0, tx1, baseline, font_size))
+    except Exception:
+        pass
+    return strikelines
+
+
+def _is_underline_drawing(drawing, baselines):
+    """Check if a drawing is an underline coincident with a text baseline."""
+    if not baselines:
+        return False
+    try:
+        items = drawing.get('items', [])
+        rect = drawing.get('rect')
+        line_y = None
+        line_x0 = None
+        line_x1 = None
+        if len(items) == 1 and items[0][0] == 'l':
+            p1, p2 = items[0][1], items[0][2]
+            if abs(p1.y - p2.y) <= 1.0 and abs(p1.x - p2.x) >= 4.0:
+                line_y = (p1.y + p2.y) / 2.0
+                line_x0, line_x1 = min(p1.x, p2.x), max(p1.x, p2.x)
+        elif rect and rect.height <= 3.5 and rect.width >= 4.0:
+            line_y = (rect.y0 + rect.y1) / 2.0
+            line_x0, line_x1 = rect.x0, rect.x1
+
+        if line_y is None or line_x0 is None or line_x1 is None:
+            return False
+
+        for tx0, tx1, baseline in baselines:
+            if abs(line_y - (baseline + 1.5)) <= 2.5:
+                overlap = min(line_x1, tx1) - max(line_x0, tx0)
+                text_width = max(0.1, tx1 - tx0)
+                if overlap >= min(4.0, text_width * 0.4):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _is_strikethrough_drawing(drawing, strikelines):
+    """Check if a drawing is a strikethrough line across text midpoint."""
+    if not strikelines:
+        return False
+    try:
+        items = drawing.get('items', [])
+        rect = drawing.get('rect')
+        line_y = None
+        line_x0 = None
+        line_x1 = None
+        if len(items) == 1 and items[0][0] == 'l':
+            p1, p2 = items[0][1], items[0][2]
+            if abs(p1.y - p2.y) <= 1.0 and abs(p1.x - p2.x) >= 4.0:
+                line_y = (p1.y + p2.y) / 2.0
+                line_x0, line_x1 = min(p1.x, p2.x), max(p1.x, p2.x)
+        elif rect and rect.height <= 3.5 and rect.width >= 4.0:
+            line_y = (rect.y0 + rect.y1) / 2.0
+            line_x0, line_x1 = rect.x0, rect.x1
+
+        if line_y is None or line_x0 is None or line_x1 is None:
+            return False
+
+        for tx0, tx1, baseline, font_sz in strikelines:
+            target_strike_y = baseline - (font_sz * 0.3)
+            tolerance = max(2.5, font_sz * 0.2)
+            if abs(line_y - target_strike_y) <= tolerance:
+                overlap = min(line_x1, tx1) - max(line_x0, tx0)
+                text_width = max(0.1, tx1 - tx0)
+                if overlap >= min(4.0, text_width * 0.4):
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _get_span_style_signature(span):
+    """Compute a normalized tuple signature for style comparison."""
+    color = span.get("color", 0)
+    if isinstance(color, (list, tuple)):
+        norm_color = tuple(round(float(c), 3) for c in color[:3])
+    else:
+        norm_color = int(color)
+    font = span.get("font", "")
+    flags = span.get("flags", 0)
+    size = round(float(span.get("size", 11.0)), 1)
+    return (norm_color, font, flags, size)
+
+
+def extract_editable_text(doc, page_index):
+    """Extract editable text spans from a PDF page into EditableText models."""
+    editable_texts = []
+    if not doc or not (0 <= page_index < doc.page_count):
+        return [], "Invalid document or page index for text extraction."
+    try:
+        page = doc.load_page(page_index)
+        text_dict = page.get_text("rawdict", flags=0)
+
+        page_drawings = None
+        try:
+            page_drawings = page.get_drawings()
+        except Exception:
+            page_drawings = []
+
+        for block in text_dict.get("blocks", []):
+            if block.get("type") == 0:
+                for line in block.get("lines", []):
+                    spans = line.get("spans", [])
+                    if not spans:
+                        continue
+                    
+                    # Group adjacent spans in line sharing identical style signature
+                    runs = []
+                    current_run = []
+                    current_sig = None
+                    
+                    for span in spans:
+                        text = "".join(c["c"] for c in span.get("chars", [])) if span.get("chars") else span.get("text", "")
+                        if not text:
+                            continue
+                        
+                        sig = _get_span_style_signature(span)
+                        
+                        # If span is purely whitespace, attach to current active run
+                        if not text.strip() and current_run:
+                            current_run.append(span)
+                            continue
+                            
+                        if current_sig is None:
+                            current_sig = sig
+                            current_run = [span]
+                        elif sig == current_sig:
+                            current_run.append(span)
+                        else:
+                            if current_run:
+                                runs.append(current_run)
+                            current_sig = sig
+                            current_run = [span]
+                            
+                    if current_run:
+                        runs.append(current_run)
+                        
+                    for run in runs:
+                        all_chars = []
+                        for s in run:
+                            if s.get("chars"):
+                                all_chars.extend(s["chars"])
+                        if all_chars:
+                            non_space = [c for c in all_chars if not c["c"].isspace()]
+                            if not non_space:
+                                continue
+                            combined_text = "".join(c["c"] for c in all_chars).strip()
+                            min_x = min(c["bbox"][0] for c in non_space)
+                            min_y = min(c["bbox"][1] for c in non_space)
+                            max_x = max(c["bbox"][2] for c in non_space)
+                            max_y = max(c["bbox"][3] for c in non_space)
+                        else:
+                            combined_text = "".join(s.get("text", "") for s in run).strip()
+                            if not combined_text:
+                                continue
+                            min_x = min(s.get("bbox", (0, 0, 0, 0))[0] for s in run)
+                            min_y = min(s.get("bbox", (0, 0, 0, 0))[1] for s in run)
+                            max_x = max(s.get("bbox", (0, 0, 0, 0))[2] for s in run)
+                            max_y = max(s.get("bbox", (0, 0, 0, 0))[3] for s in run)
+                            
+                        bbox = [min_x, min_y, max_x, max_y]
+                        
+                        first_span = run[0]
+                        span_data = first_span.copy()
+                        span_data["bbox"] = tuple(bbox)
+                        span_data["text"] = combined_text
+
+                        orig_origin = first_span.get("origin", (0, bbox[3]))
+                        
+                        line_dir = line.get("dir", (1.0, 0.0))
+                        line_rot = 0.0
+                        if line_dir and (abs(line_dir[0] - 1.0) > 1e-3 or abs(line_dir[1]) > 1e-3):
+                            line_rot = round(math.degrees(math.atan2(line_dir[1], line_dir[0])), 1) % 360.0
+
+                        editable = EditableText(
+                            x=bbox[0], y=bbox[1], text=combined_text,
+                            font_size=first_span.get("size", 11) if first_span else 11,
+                            font_family=first_span.get("font", "Liberation Sans") if first_span else "Liberation Sans",
+                            color=first_span.get("color", 0) if first_span else 0,
+                            span_data=span_data,
+                            baseline=orig_origin[1],
+                            rotation=line_rot
+                        )
+                        editable.bbox = tuple(bbox)
+                        editable.original_bbox = editable.bbox
+                        editable.original_baseline = editable.baseline
+                        editable.original_rotation = editable.rotation
+                        editable.page_number = page_index
+                        if page_drawings:
+                            for d in page_drawings:
+                                if _is_underline_drawing(d, [(bbox[0], bbox[2], orig_origin[1])]):
+                                    editable.is_underline = True
+                                    break
+                            for d in page_drawings:
+                                if _is_strikethrough_drawing(d, [(bbox[0], bbox[2], orig_origin[1], editable.font_size)]):
+                                    editable.is_strikethrough = True
+                                    break
+                        editable_texts.append(editable)
+                        logger.debug(f"Extracted text segment: '{combined_text}' font='{editable.font_family_base}' color={editable.color} bbox={editable.bbox}")
+        
+        logger.debug(f"Total text objects extracted from page {page_index}: {len(editable_texts)}")
+        return editable_texts, None
+    except Exception as e:
+        error_msg = f"Error extracting text from page {page_index}: {e}"
+        print(error_msg)
+        traceback.print_exc()
+        return [], error_msg
+
+def text_width(obj):
+    """Width in points of the widest line of ``obj`` in the font used to render it."""
+    lines = (obj.text or '').split('\n')
+    try:
+        font_arg, error = _get_font_args_for_pymupdf(obj)
+        if not error:
+            font = fitz.Font(fontname=font_arg.get("fontname", "helv"), fontfile=font_arg.get("fontfile"))
+            return max(font.text_length(line, fontsize=obj.font_size) for line in lines)
+    except Exception:
+        pass
+    calc_font = _get_base14_font_variant(getattr(obj, "pdf_fontname_base14", "helv"),
+                                         getattr(obj, "is_bold", False), getattr(obj, "is_italic", False))
+    return max(fitz.get_text_length(line, fontname=calc_font, fontsize=obj.font_size) for line in lines)
+
+
+def _get_base14_font_variant(base_name, is_bold, is_italic):
+    """Get the base14 font variant."""
+    mapping = {'helv': 'Helvetica', 'timr': 'Times', 'cour': 'Courier'}
+    pdf_base = mapping.get(base_name, 'Helvetica')
+    if is_bold and is_italic:
+        if pdf_base == 'Helvetica': return 'Helvetica-BoldOblique'
+        if pdf_base == 'Times': return 'Times-BoldItalic'
+        if pdf_base == 'Courier': return 'Courier-BoldOblique'
+    elif is_bold:
+        if pdf_base == 'Helvetica': return 'Helvetica-Bold'
+        if pdf_base == 'Times': return 'Times-Bold'
+        if pdf_base == 'Courier': return 'Courier-Bold'
+    elif is_italic:
+        if pdf_base == 'Helvetica': return 'Helvetica-Oblique'
+        if pdf_base == 'Times': return 'Times-Italic'
+        if pdf_base == 'Courier': return 'Courier-Oblique'
+    else:
+        if pdf_base == 'Helvetica': return 'Helvetica'
+        if pdf_base == 'Times': return 'Times-Roman'
+        if pdf_base == 'Courier': return 'Courier'
+    return pdf_base
+
+def apply_text_edit(doc, text_obj: EditableText, new_text: str):
+    """Burn edited text modifications into the underlying PDF page stream."""
+    if not doc or text_obj.page_number is None:
+        return False, "Invalid document or page number."
+
+    font_arg, error_msg = _get_font_args_for_pymupdf(text_obj)
+    if error_msg:
+        return False, error_msg
+
+    try:
+        page = doc.load_page(text_obj.page_number)
+        
+        logger.debug(f"apply_text_edit: is_new={text_obj.is_new}, new_text='{new_text}'")
+        logger.debug(f"text_obj bbox: {text_obj.bbox}")
+        
+        if new_text.strip():
+            text_color = (0, 0, 0)
+            if text_obj.color:
+                if isinstance(text_obj.color, (tuple, list)) and len(text_obj.color) >= 3:
+                    text_color = tuple(float(c) for c in text_obj.color[:3])
+                elif isinstance(text_obj.color, int):
+                    blue = (text_obj.color & 255) / 255.0
+                    green = ((text_obj.color >> 8) & 255) / 255.0
+                    red = ((text_obj.color >> 16) & 255) / 255.0
+                    text_color = (red, green, blue)
+            
+            logger.debug(f"Inserting updated text '{new_text}' at point ({text_obj.x}, {text_obj.baseline})")
+            
+            line_point = fitz.Point(text_obj.x, text_obj.baseline)
+            rc = page.insert_text(
+                line_point,
+                new_text,
+                fontsize=text_obj.font_size,
+                color=text_color,
+                overlay=True,
+                **font_arg
+            )
+            logger.debug(f"insert_text returned: {rc}")
+            if rc < 0:
+                print(f"ERROR: insert_text failed with rc={rc}")
+                return False, f"PyMuPDF insert_text error: {rc}"
+
+        return True, None
+    except Exception as e:
+        print(f"ERROR applying text edit: {e}")
+        traceback.print_exc()
+        return False, f"Error during text application: {e}"
+
+def can_save_incrementally(doc, save_path):
+    """True when changes can be appended to the file the document was opened from."""
+    try:
+        return bool(doc and doc.name and save_path and os.path.isfile(save_path)
+                    and os.path.realpath(doc.name) == os.path.realpath(save_path)
+                    and doc.can_save_incrementally())
+    except Exception:
+        return False
+
+
+def save_document(doc, save_path, incremental=False):
+    """Save a document.
+
+    The default writes a compacted full copy and atomically replaces the target.
+    ``incremental=True`` appends only the changes to the original file instead,
+    which keeps earlier revisions (and their digital signatures) byte-for-byte
+    intact; it requires saving back to the file the document was opened from.
+    """
+    if not doc:
+        return False, _("err_no_doc_to_save")
+
+    temp_path = f"{save_path}.tmp_save"
+
+    try:
+        from .page_state import persist
+        persist(doc)
+        if incremental:
+            if not can_save_incrementally(doc, save_path):
+                return False, _("err_incremental_unavailable")
+            doc.save(save_path, incremental=True, encryption=fitz.PDF_ENCRYPT_KEEP)
+            return True, None
+        # Compact a separate document: garbage collection renumbers xrefs and
+        # would invalidate the live editor's undo snapshots.
+        payload = doc.tobytes(garbage=0,encryption=fitz.PDF_ENCRYPT_KEEP)
+        with fitz.open(stream=payload,filetype='pdf') as output:
+            if output.needs_pass and not output.authenticate(getattr(doc,'editor_password','')):
+                raise ValueError('Could not authenticate the encrypted save copy.')
+            output.save(temp_path,garbage=4,deflate=True,encryption=fitz.PDF_ENCRYPT_KEEP)
+
+        os.replace(temp_path, save_path)
+        return True, None
+
+    except Exception as e:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        
+        return False, _("err_pdf_save", e)
+    
+def export_document(doc=None, source_pdf_path=None, output_path=None,
+                    target_format="docx", mode="standard", password=""):
+    """Export the current PDF locally to DOCX (pdf2docx) or TXT (MuPDF).
+
+    The legacy mode argument is accepted for callers; pdf2docx uses its own
+    document/table layout analysis. Conversion is strict: failed pages abort
+    the export, and an existing destination survives any failure.
+    """
+    if not output_path:
+        return False, "Destination output path must be specified for export."
+    fmt = str(target_format).lower().strip().lstrip(".")
+    if fmt not in ("docx", "txt"):
+        return False, f"Unsupported export format: '{target_format}'. Supported formats are DOCX and TXT."
+    if fmt == "docx" and not HAS_PDF2DOCX:
+        return False, "Word export requires pdf2docx. Install the app dependencies with python -m pip install -e ."
+    destination = Path(output_path)
+    if not str(destination).lower().endswith(f".{fmt}"):
+        destination = Path(f"{destination}.{fmt}")
+    temporary_output = None
+    converter = None
+    try:
+        if isinstance(doc, (bytes, bytearray)):
+            data = bytes(doc)
+        elif doc is not None:
+            data = doc.tobytes(garbage=0, clean=False, deflate=True)
+        elif source_pdf_path and os.path.isfile(source_pdf_path):
+            data = Path(source_pdf_path).read_bytes()
+        else:
+            return False, "No valid document or file path provided for export."
+        # Authenticate and serialize a private copy; the live PDF is untouched.
+        with fitz.open(stream=data, filetype="pdf") as source:
+            if source.needs_pass:
+                if not password:
+                    return False, "The PDF document is password-protected. Please provide the decryption password."
+                if not source.authenticate(password):
+                    return False, "The decryption password provided is incorrect."
+                data = source.tobytes(encryption=fitz.PDF_ENCRYPT_NONE)
+            if not source.page_count:
+                return False, "The PDF contains no pages to export."
+            if fmt == "txt":
+                text = "\n\f\n".join(page.get_text("text", sort=True) for page in source)
+                result = text.encode("utf-8")
+                if not text.strip():
+                    return False, "No selectable text was found in this PDF."
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=destination.parent, prefix=".pdflx-export-",
+                                         suffix=f".{fmt}", delete=False) as output:
+            temporary_output = output.name
+            if fmt == "txt":
+                output.write(result)
+        if fmt == "docx":
+            converter = Pdf2DocxConverter(stream=data)
+            converter.convert(temporary_output, multi_processing=False,
+                              ignore_page_error=False, raw_exceptions=True)
+            converter.close()
+            converter = None
+        if not os.path.getsize(temporary_output):
+            return False, "Export completed but the converted document is empty."
+        os.replace(temporary_output, destination)
+        return True, None
+    except Exception as error:
+        return False, f"Error during {fmt.upper()} export: {error}"
+    finally:
+        if converter is not None:
+            try:
+                converter.close()
+            except Exception:
+                pass
+        if temporary_output and os.path.exists(temporary_output):
+            os.unlink(temporary_output)
+
+
+def export_pdf_as_docx(doc, source_pdf_path, output_docx_path, mode="standard", password=""):
+    """Convert digital document content and tables to Word with pdf2docx."""
+    return export_document(doc, source_pdf_path, output_docx_path, "docx", mode=mode, password=password)
+
+
+def export_pdf_as_text(doc, output_txt_path, source_pdf_path=None, mode="standard", password=""):
+    """Extract native selectable text locally with MuPDF."""
+    return export_document(doc, source_pdf_path, output_txt_path, "txt", mode=mode, password=password)
+
+
+def get_image_rgba_bytes(doc, xref):
+    """Extract image as RGBA PNG bytes, compositing alpha/smask if present."""
+    try:
+        image_data = doc.extract_image(xref)
+        if not image_data or 'image' not in image_data:
+            return None
+
+        smask_xref = image_data.get('smask', 0)
+        if not smask_xref:
+            try:
+                smask_val = doc.xref_get_key(xref, "SMask")
+                if smask_val and smask_val[0] == "xref":
+                    smask_xref = int(smask_val[1].split()[0])
+            except Exception:
+                pass
+
+        base_pix = fitz.Pixmap(doc, xref)
+
+        # If soft mask (alpha transparency) is present
+        if smask_xref and smask_xref > 0:
+            try:
+                mask_pix = fitz.Pixmap(doc, smask_xref)
+                if base_pix.n != 3:
+                    base_pix = fitz.Pixmap(fitz.csRGB, base_pix)
+                if mask_pix.n != 1:
+                    mask_pix = fitz.Pixmap(fitz.csGRAY, mask_pix)
+                if base_pix.width == mask_pix.width and base_pix.height == mask_pix.height:
+                    rgba_pix = fitz.Pixmap(base_pix, mask_pix)
+                    return rgba_pix.tobytes("png")
+                else:
+                    from PIL import Image
+                    import io
+                    base_img = Image.open(io.BytesIO(base_pix.tobytes("png"))).convert("RGB")
+                    mask_img = Image.open(io.BytesIO(mask_pix.tobytes("png"))).convert("L")
+                    mask_img = mask_img.resize(base_img.size, Image.Resampling.LANCZOS)
+                    base_img.putalpha(mask_img)
+                    out_buf = io.BytesIO()
+                    base_img.save(out_buf, format="PNG")
+                    return out_buf.getvalue()
+            except Exception as mask_err:
+                print(f"Warning: smask compositing failed for xref {xref}: {mask_err}")
+
+        # If base pixmap itself has alpha channel
+        if base_pix.alpha:
+            if base_pix.n != 4:
+                base_pix = fitz.Pixmap(fitz.csRGB, base_pix)
+            return base_pix.tobytes("png")
+
+        # If CMYK without alpha, convert to standard RGB PNG
+        if base_pix.n >= 4:
+            rgb_pix = fitz.Pixmap(fitz.csRGB, base_pix)
+            return rgb_pix.tobytes("png")
+
+        # Standard image (JPEG, non-transparent PNG, etc.)
+        return image_data["image"]
+    except Exception as e:
+        print(f"Warning: get_image_rgba_bytes failed for xref {xref}: {e}")
+        try:
+            return doc.extract_image(xref).get("image")
+        except Exception:
+            return None
+
+def extract_editable_images(doc, page_index):
+    """Extract raster image objects and bounding boxes from a PDF page."""
+    editable_images = []
+    if not doc or not (0 <= page_index < doc.page_count):
+        return [], _("err_invalid_doc_page_extract")
+    
+    try:
+        page = doc.load_page(page_index)
+        image_info_list = page.get_image_info(xrefs=True)
+        
+        if not image_info_list:
+            logger.debug(f"No images found via get_image_info on page {page_index}. Trying alternative method...")
+            image_info_list = []
+        
+        for img_info in image_info_list:
+            try:
+                bbox = img_info.get('bbox')
+                xref = img_info.get('xref')
+                
+                if not bbox or not xref:
+                    continue
+ 
+                rect = fitz.Rect(bbox)
+                if rect.is_empty or not rect.is_valid:
+                    continue
+ 
+                try:
+                    image_bytes = get_image_rgba_bytes(doc, xref)
+                    if not image_bytes:
+                        logger.debug(f"Could not extract image data for xref {xref}")
+                        continue
+                    
+                    rotation=0.0
+                    matrix=fitz.Matrix(img_info.get('transform',(rect.width,0,0,rect.height,rect.x0,rect.y0)))
+                    width=math.hypot(matrix.a,matrix.b)
+                    height=math.hypot(matrix.c,matrix.d)
+                    orthogonal=abs(matrix.a*matrix.c+matrix.b*matrix.d)<=max(1,width*height)*1e-5
+                    if width>0 and height>0 and matrix.a*matrix.d-matrix.b*matrix.c>0 and orthogonal:
+                        center=fitz.Point(.5,.5)*matrix
+                        rect=fitz.Rect(center.x-width/2,center.y-height/2,center.x+width/2,center.y+height/2)
+                        rotation=math.degrees(math.atan2(matrix.b,matrix.a))%360
+                    image_obj = EditableImage(
+                        bbox=tuple(rect),page_number=page_index,xref=xref,
+                        image_bytes=image_bytes,rotation=rotation
+                    )
+                    editable_images.append(image_obj)
+                except Exception as extract_error:
+                    logger.debug(f"Error extracting image bytes for xref {xref}: {extract_error}")
+                    continue
+                    
+            except (ValueError, TypeError) as e:
+                print(_("warn_image_skipped", page_index+1, img_info.get('xref'), e))
+                continue
+        
+        logger.debug(f"Extracted {len(editable_images)} images from page {page_index}")
+        return editable_images, None
+    except Exception as e:
+        error_msg = _("err_image_extract_page", page_index+1, e)
+        print(error_msg)
+        traceback.print_exc()
+        return [], error_msg
+
+def add_image_to_page(doc, page_number, image_path, rect):
+    """Insert image bytes onto a PDF page at the specified bounding box."""
+    if not doc or page_number is None:
+        return False, _("err_invalid_doc_page_add_image")
+    try:
+        page = doc.load_page(page_number)
+        page.insert_image(rect, filename=image_path)
+        return True, None
+    except FileNotFoundError:
+        return False, _("err_image_file_not_found", image_path)
+    except Exception as e:
+        print(_("err_placing_image", e))
+        traceback.print_exc()
+        return False, _("err_placing_image", e)
+
+def delete_image_from_page(doc, image_obj: EditableImage):
+    """Remove image drawing from page snapshot via targeted redaction."""
+    if not doc or image_obj.page_number is None:
+        return False, _("err_invalid_doc_page_delete_image")
+    try:
+        page = doc.load_page(image_obj.page_number)
+
+        redact_rect = fitz.Rect(image_obj.bbox)
+        if not redact_rect.is_empty and redact_rect.is_valid:
+            page.add_redact_annot(redact_rect)
+            try:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE, graphics=0, text=1)
+            except TypeError:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_REMOVE)
+            doc.load_page(image_obj.page_number)
+            invalidate_page_cache(doc, image_obj.page_number)
+            return True, None
+        else:
+            return False, _("err_invalid_image_bbox")
+    except Exception as e:
+        print(_("err_deleting_image", e))
+        traceback.print_exc()
+        return False, _("err_deleting_image", e)
+
+def delete_shape_from_page(doc, shape_obj: EditableShape):
+    """Remove vector shape from page snapshot via targeted redaction."""
+    if not doc or shape_obj.page_number is None:
+        return False, _("err_invalid_doc_page_delete_shape")
+    try:
+        page = doc.load_page(shape_obj.page_number)
+
+        x0, y0, x1, y1 = shape_obj.bbox
+        pad = max(getattr(shape_obj, 'stroke_width', 2.0) / 2.0 + 1.5, 2.0)
+        redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+        if not redact_rect.is_empty and redact_rect.is_valid:
+            page.add_redact_annot(redact_rect)
+            try:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
+            except TypeError:
+                try:
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
+                except Exception:
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+            doc.load_page(shape_obj.page_number)
+            invalidate_page_cache(doc, shape_obj.page_number)
+            return True, None
+        else:
+            return False, _("err_invalid_shape_bbox")
+    except Exception as e:
+        print(_("err_deleting_shape", e))
+        traceback.print_exc()
+        return False, _("err_deleting_shape", e)
+
+def delete_stroke_from_page(doc, stroke_obj: EditableStroke):
+    """Remove freehand stroke from page snapshot via targeted redaction."""
+    if not doc or stroke_obj.page_number is None:
+        return False, "Invalid document or page number."
+    try:
+        page = doc.load_page(stroke_obj.page_number)
+        x0, y0, x1, y1 = stroke_obj.bbox
+        pad = max(getattr(stroke_obj, 'stroke_width', 2.0) / 2.0 + 1.5, 2.0)
+        redact_rect = fitz.Rect(x0 - pad, y0 - pad, x1 + pad, y1 + pad)
+        if not redact_rect.is_empty and redact_rect.is_valid:
+            page.add_redact_annot(redact_rect)
+            try:
+                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
+            except TypeError:
+                try:
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=True)
+                except Exception:
+                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE)
+            doc.load_page(stroke_obj.page_number)
+            invalidate_page_cache(doc, stroke_obj.page_number)
+            return True, None
+        return False, "Invalid stroke bounding box."
+    except Exception as e:
+        print(f"Error deleting stroke: {e}")
+        traceback.print_exc()
+        return False, str(e)
+
+
+
+def extract_editable_shapes(doc, page_index):
+    """Extract editable geometric shapes (rectangles, ellipses)."""
+    editable_shapes = []
+    if not doc or not (0 <= page_index < doc.page_count):
+        return [], "Invalid document or page index for shape extraction."
+    try:
+        page = doc.load_page(page_index)
+        drawings = page.get_drawings()
+        baselines = _get_page_text_baselines(page)
+        strikelines = _get_page_text_strikelines(page)
+        for drawing in drawings:
+            try:
+                if _is_underline_drawing(drawing, baselines) or _is_strikethrough_drawing(drawing, strikelines):
+                    continue
+                items = drawing.get('items', [])
+                if not items:
+                    continue
+
+                raw_fill = drawing.get('fill')
+                raw_stroke = drawing.get('color')
+                raw_width = drawing.get('width', 1.0)
+                is_transparent = (raw_fill is None)
+                fill_color = raw_fill if raw_fill else (1.0, 1.0, 1.0)
+                stroke_color = raw_stroke if raw_stroke else (0.0, 0.0, 0.0)
+                stroke_width = float(raw_width) if raw_width else 1.0
+
+                # Check if rectangle:
+                if len(items) == 1 and items[0][0] == 're':
+                    r = fitz.Rect(items[0][1])
+                    if r.width >= 2 and r.height >= 2:
+                        shape_obj = EditableShape(
+                            shape_type=EditableShape.SHAPE_RECTANGLE,
+                            bbox=(r.x0, r.y0, r.x1, r.y1),
+                            fill_color=fill_color,
+                            stroke_color=stroke_color,
+                            stroke_width=stroke_width,
+                            page_number=page_index,
+                            is_new=False,
+                            is_transparent=is_transparent,
+                            rotation=0.0
+                        )
+                        shape_obj.is_baked = True
+                        editable_shapes.append(shape_obj)
+                    continue
+
+                # Check if ellipse:
+                if len(items) == 4 and all(it[0] == 'c' for it in items):
+                    rect = drawing.get('rect')
+                    if rect:
+                        r = fitz.Rect(rect)
+                        if r.width >= 2 and r.height >= 2:
+                            shape_obj = EditableShape(
+                                shape_type=EditableShape.SHAPE_ELLIPSE,
+                                bbox=(r.x0, r.y0, r.x1, r.y1),
+                                fill_color=fill_color,
+                                stroke_color=stroke_color,
+                                stroke_width=stroke_width,
+                                page_number=page_index,
+                                is_new=False,
+                                is_transparent=is_transparent,
+                                rotation=0.0
+                            )
+                            shape_obj.is_baked = True
+                            editable_shapes.append(shape_obj)
+                    continue
+
+                # If drawing is filled, treat as rectangle shape by bounding box
+                if raw_fill is not None:
+                    rect = drawing.get('rect')
+                    if rect:
+                        r = fitz.Rect(rect)
+                        if r.width >= 2 and r.height >= 2:
+                            shape_obj = EditableShape(
+                                shape_type=EditableShape.SHAPE_RECTANGLE,
+                                bbox=(r.x0, r.y0, r.x1, r.y1),
+                                fill_color=fill_color,
+                                stroke_color=stroke_color,
+                                stroke_width=stroke_width,
+                                page_number=page_index,
+                                is_new=False,
+                                is_transparent=False,
+                                rotation=0.0
+                            )
+                            shape_obj.is_baked = True
+                            editable_shapes.append(shape_obj)
+            except Exception as item_err:
+                print(f"Warning: skipping shape drawing item: {item_err}")
+                continue
+
+        logger.debug(f"Extracted {len(editable_shapes)} shapes from page {page_index}")
+        return editable_shapes, None
+    except Exception as e:
+        error_msg = f"Error extracting shapes from page {page_index}: {e}"
+        print(error_msg)
+        return [], error_msg
+
+
+def extract_editable_strokes(doc, page_index):
+    """Extract editable freehand and highlighter strokes."""
+    editable_strokes = []
+    if not doc or not (0 <= page_index < doc.page_count):
+        return [], "Invalid document or page index for stroke extraction."
+    try:
+        page = doc.load_page(page_index)
+        drawings = page.get_drawings()
+        baselines = _get_page_text_baselines(page)
+        strikelines = _get_page_text_strikelines(page)
+        for drawing in drawings:
+            try:
+                if _is_underline_drawing(drawing, baselines) or _is_strikethrough_drawing(drawing, strikelines):
+                    continue
+                items = drawing.get('items', [])
+                if not items:
+                    continue
+
+                # Skip pure shapes (handled by extract_editable_shapes)
+                if len(items) == 1 and items[0][0] == 're':
+                    continue
+                if len(items) == 4 and all(it[0] == 'c' for it in items):
+                    continue
+                if drawing.get('fill') is not None:
+                    continue
+
+                raw_stroke = drawing.get('color')
+                raw_width = drawing.get('width', 1.0)
+                raw_opacity = drawing.get('opacity')
+
+                subpaths = []
+                current_subpath = []
+                for it in items:
+                    if it[0] == 'l':
+                        p1, p2 = (it[1].x, it[1].y), (it[2].x, it[2].y)
+                        if current_subpath and current_subpath[-1] != p1:
+                            subpaths.append(current_subpath)
+                            current_subpath = [p1, p2]
+                        else:
+                            if not current_subpath:
+                                current_subpath.append(p1)
+                            current_subpath.append(p2)
+                    elif it[0] == 'c':
+                        p1, p4 = (it[1].x, it[1].y), (it[4].x, it[4].y)
+                        if current_subpath and current_subpath[-1] != p1:
+                            subpaths.append(current_subpath)
+                            current_subpath = [p1, p4]
+                        else:
+                            if not current_subpath:
+                                current_subpath.append(p1)
+                            current_subpath.append(p4)
+                if current_subpath:
+                    subpaths.append(current_subpath)
+
+                stroke_width = float(raw_width) if raw_width else 2.0
+                is_hl = (stroke_width >= 8.0) or (raw_opacity is not None and raw_opacity < 0.9)
+                tool_type = EditableStroke.TOOL_HIGHLIGHTER if is_hl else EditableStroke.TOOL_PEN
+                opacity = float(raw_opacity) if raw_opacity is not None else (0.35 if is_hl else 1.0)
+                stroke_color = raw_stroke if raw_stroke else (0.0, 0.0, 0.0)
+
+                for sp in subpaths:
+                    if sp and len(sp) >= 1:
+                        stroke_obj = EditableStroke(
+                            points=sp,
+                            stroke_color=stroke_color,
+                            stroke_width=stroke_width,
+                            opacity=opacity,
+                            tool_type=tool_type,
+                            page_number=page_index,
+                            is_new=False,
+                            rotation=0.0
+                        )
+                        stroke_obj.is_baked = True
+                        editable_strokes.append(stroke_obj)
+            except Exception as item_err:
+                print(f"Warning: skipping stroke drawing item: {item_err}")
+                continue
+
+        logger.debug(f"Extracted {len(editable_strokes)} strokes from page {page_index}")
+        return editable_strokes, None
+    except Exception as e:
+        error_msg = f"Error extracting strokes from page {page_index}: {e}"
+        print(error_msg)
+        return [], error_msg
+
+_page_snapshots: dict = {}
+_page_original_links: dict = {}
+
+def save_page_snapshot(doc, page_num: int, force: bool = False):
+    """Cache an unedited copy of a PDF page to allow cleanly erasing original objects."""
+    key = (id(doc), page_num)
+    if key in _page_snapshots and not force:
+        return  
+    try:
+        page = doc.load_page(page_num)
+        page.clean_contents()
+        xrefs = page.get_contents()
+        content = b""
+        for xref in xrefs:
+            raw = doc.xref_stream(xref)
+            if raw:
+                content += raw
+        _page_snapshots[key] = content
+        _page_original_links[key] = page.get_links()
+    except Exception as e:
+        print(f"Warning: could not save snapshot for page {page_num}: {e}")
+
+
+def restore_page_from_snapshot(doc, page_num: int) -> bool:
+    """Restore a page from its cached snapshot state."""
+    key = (id(doc), page_num)
+    if key not in _page_snapshots:
+        return False
+    try:
+        content = _page_snapshots[key]
+        page = doc.load_page(page_num)
+        page.clean_contents()
+        xrefs = page.get_contents()
+        if xrefs:
+            doc.update_stream(xrefs[0], content)
+            for extra_xref in xrefs[1:]:
+                try:
+                    doc.xref_set_key(extra_xref, "Length", "0")
+                    doc.update_stream(extra_xref, b"")
+                except Exception as error:
+                    logger.warning("Could not clear obsolete content stream %s: %s", extra_xref, error)
+        else:
+            xref = doc.get_new_xref()
+            doc.update_object(xref, "<<>>")
+            doc.update_stream(xref, content)
+            page.set_contents(xref)
+            
+        original_links = _page_original_links.get(key, [])
+        original_signatures = set()
+        for link in original_links:
+            rect = link.get("from")
+            rect_tuple = (rect.x0, rect.y0, rect.x1, rect.y1) if rect else (0, 0, 0, 0)
+            sig = (link.get("kind"), rect_tuple, link.get("uri"))
+            original_signatures.add(sig)
+            
+        current_links = page.get_links()
+        for link in current_links:
+            rect = link.get("from")
+            rect_tuple = (rect.x0, rect.y0, rect.x1, rect.y1) if rect else (0, 0, 0, 0)
+            sig = (link.get("kind"), rect_tuple, link.get("uri"))
+            if sig not in original_signatures:
+                page.delete_link(link)
+                
+        invalidate_page_cache(doc, page_num)
+        return True
+    except Exception as e:
+        print(f"Warning: could not restore snapshot for page {page_num}: {e}")
+        return False
+
+def release_page_snapshots(doc):
+    """Release and clear all cached page snapshots for a document."""
+    doc_id = id(doc)
+    keys_to_remove = [k for k in _page_snapshots if k[0] == doc_id]
+    for k in keys_to_remove:
+        del _page_snapshots[k]
+        if k in _page_original_links:
+            del _page_original_links[k]
+
+def _apply_single_object_to_page(doc, page, obj):
+    """Render a single object (text, image, shape, stroke) onto a PDF page with transforms."""
+    rot = getattr(obj, "rotation", 0.0) % 360.0
+
+    if isinstance(obj, EditableText):
+        if obj.text:
+            font_arg, error_msg = _get_font_args_for_pymupdf(obj)
+            if error_msg:
+                return False, error_msg
+            lines = obj.text.split('\n')
+            line_height = obj.font_size * 1.2
+            
+            base_name = getattr(obj, "pdf_fontname_base14", "helv")
+            is_bold = getattr(obj, "is_bold", False)
+            is_italic = getattr(obj, "is_italic", False)
+            calc_font = _get_base14_font_variant(base_name, is_bold, is_italic)
+            
+            fontname = font_arg.get("fontname", "helv")
+            fontfile = font_arg.get("fontfile", None)
+            font_obj = None
+            try:
+                font_obj = fitz.Font(fontname=fontname, fontfile=fontfile)
+            except Exception:
+                pass
+
+            cx = (obj.bbox[0] + obj.bbox[2]) / 2.0 if obj.bbox else obj.x
+            cy = (obj.bbox[1] + obj.bbox[3]) / 2.0 if obj.bbox else obj.y
+            morph = (fitz.Point(cx, cy), fitz.Matrix(-rot)) if rot != 0.0 else None
+            mat = get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
+
+            align = getattr(obj, 'alignment', 'left')
+            box_w = (obj.bbox[2] - obj.bbox[0]) if obj.bbox and (obj.bbox[2] > obj.bbox[0]) else None
+
+            for i, line in enumerate(lines):
+                links = list(re.finditer(r'(https?://[^\s]+|www\.[^\s]+)', line))
+                
+                if font_obj:
+                    try:
+                        text_len = font_obj.text_length(line, fontsize=obj.font_size)
+                    except Exception:
+                        text_len = fitz.get_text_length(line, fontname=calc_font, fontsize=obj.font_size)
+                else:
+                    text_len = fitz.get_text_length(line, fontname=calc_font, fontsize=obj.font_size)
+
+                w_avail = box_w if box_w and box_w > text_len else text_len
+                if align == 'center':
+                    line_start_x = obj.x + max(0.0, (w_avail - text_len) / 2.0)
+                elif align == 'right':
+                    line_start_x = obj.x + max(0.0, w_avail - text_len)
+                else:
+                    line_start_x = obj.x
+
+                if not links:
+                    is_justified = (align == 'justify' and box_w and box_w > text_len and i < len(lines) - 1)
+                    words = line.split(' ') if is_justified else None
+                    if is_justified and words and len(words) > 1:
+                        word_lens = []
+                        for w in words:
+                            if font_obj:
+                                try:
+                                    wl = font_obj.text_length(w, fontsize=obj.font_size)
+                                except Exception:
+                                    wl = fitz.get_text_length(w, fontname=calc_font, fontsize=obj.font_size)
+                            else:
+                                wl = fitz.get_text_length(w, fontname=calc_font, fontsize=obj.font_size)
+                            word_lens.append(wl)
+                        total_w = sum(word_lens)
+                        space_w = (box_w - total_w) / (len(words) - 1)
+                        curr_wx = obj.x
+                        for w, wl in zip(words, word_lens):
+                            if w:
+                                pos = fitz.Point(curr_wx, obj.baseline + (i * line_height))
+                                page.insert_text(pos, w, fontsize=obj.font_size,
+                                                 color=obj.color, overlay=True, morph=morph, **font_arg)
+                            curr_wx += wl + space_w
+                        line_draw_x = obj.x
+                        draw_len = box_w
+                    else:
+                        pos = fitz.Point(line_start_x, obj.baseline + (i * line_height))
+                        page.insert_text(pos, line, fontsize=obj.font_size,
+                                         color=obj.color, overlay=True, morph=morph, **font_arg)
+                        line_draw_x = line_start_x
+                        draw_len = text_len
+                    
+                    if getattr(obj, 'is_underline', False):
+                        p1 = fitz.Point(line_draw_x, obj.baseline + (i * line_height) + 1.5)
+                        p2 = fitz.Point(line_draw_x + draw_len, obj.baseline + (i * line_height) + 1.5)
+                        if mat:
+                            p1 = p1 * mat
+                            p2 = p2 * mat
+                        page.draw_line(p1, p2, color=obj.color, width=0.8)
+
+                    if getattr(obj, 'is_strikethrough', False):
+                        sp1 = fitz.Point(line_draw_x, obj.baseline + (i * line_height) - (obj.font_size * 0.3))
+                        sp2 = fitz.Point(line_draw_x + draw_len, obj.baseline + (i * line_height) - (obj.font_size * 0.3))
+                        if mat:
+                            sp1 = sp1 * mat
+                            sp2 = sp2 * mat
+                        page.draw_line(sp1, sp2, color=obj.color, width=0.8)
+                else:
+                    segments = []
+                    last_idx = 0
+                    for match in links:
+                        start, end = match.start(), match.end()
+                        if start > last_idx:
+                            segments.append((line[last_idx:start], False))
+                        segments.append((line[start:end], True))
+                        last_idx = end
+                    if last_idx < len(line):
+                        segments.append((line[last_idx:], False))
+                        
+                    current_x = line_start_x
+                    for seg_text, is_seg_link in segments:
+                        if not seg_text:
+                            continue
+                        
+                        seg_color = (0.0, 0.33, 0.8) if is_seg_link else obj.color
+                        pos = fitz.Point(current_x, obj.baseline + (i * line_height))
+                        page.insert_text(pos, seg_text, fontsize=obj.font_size,
+                                         color=seg_color, overlay=True, morph=morph, **font_arg)
+                        
+                        if font_obj:
+                            try:
+                                seg_len = font_obj.text_length(seg_text, fontsize=obj.font_size)
+                            except Exception:
+                                seg_len = fitz.get_text_length(seg_text, fontname=calc_font, fontsize=obj.font_size)
+                        else:
+                            seg_len = fitz.get_text_length(seg_text, fontname=calc_font, fontsize=obj.font_size)
+                        
+                        if is_seg_link or getattr(obj, 'is_underline', False):
+                            p1 = fitz.Point(current_x, obj.baseline + (i * line_height) + 1.5)
+                            p2 = fitz.Point(current_x + seg_len, obj.baseline + (i * line_height) + 1.5)
+                            if mat:
+                                p1 = p1 * mat
+                                p2 = p2 * mat
+                            page.draw_line(p1, p2, color=seg_color, width=0.8)
+
+                        if getattr(obj, 'is_strikethrough', False):
+                            sp1 = fitz.Point(current_x, obj.baseline + (i * line_height) - (obj.font_size * 0.3))
+                            sp2 = fitz.Point(current_x + seg_len, obj.baseline + (i * line_height) - (obj.font_size * 0.3))
+                            if mat:
+                                sp1 = sp1 * mat
+                                sp2 = sp2 * mat
+                            page.draw_line(sp1, sp2, color=seg_color, width=0.8)
+                            
+                        if is_seg_link:
+                            y0 = obj.baseline + (i * line_height) - obj.font_size
+                            y1 = obj.baseline + (i * line_height) + (obj.font_size * 0.2)
+                            link_rect = fitz.Rect(current_x, y0, current_x + seg_len, y1)
+                            
+                            uri = seg_text
+                            if not uri.startswith(("http://", "https://")):
+                                uri = "https://" + uri
+                                
+                            link_from = link_rect.quad * mat if mat else link_rect.quad
+                            rect = link_from.rect if hasattr(link_from, 'rect') else fitz.Rect(link_from)
+                            link_data = {"kind": fitz.LINK_URI, "from": rect, "uri": uri}
+                            page.insert_link(link_data)
+                            
+                        current_x += seg_len
+                        
+    elif isinstance(obj, EditableImage):
+        from .image_editing import insert_image
+        insert_image(doc, page, obj)
+    elif isinstance(obj, EditableShape):
+        rect = fitz.Rect(obj.bbox)
+        shape = page.new_shape()
+        stroke = tuple(float(c) for c in obj.stroke_color)
+        fill = tuple(float(c) for c in obj.fill_color) if not obj.is_transparent else None
+        cx = (rect.x0 + rect.x1) / 2.0
+        cy = (rect.y0 + rect.y1) / 2.0
+        mat = get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
+
+        if obj.shape_type == EditableShape.SHAPE_RECTANGLE:
+            if mat:
+                shape.draw_quad(rect.quad * mat)
+            else:
+                shape.draw_rect(rect)
+            shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
+        elif obj.shape_type == EditableShape.SHAPE_ELLIPSE:
+            if mat:
+                k = 0.5522847498307935
+                rx = (rect.x1 - rect.x0) / 2.0
+                ry = (rect.y1 - rect.y0) / 2.0
+                beziers = [
+                    (fitz.Point(cx + rx, cy), fitz.Point(cx + rx, cy - k * ry), fitz.Point(cx + k * rx, cy - ry), fitz.Point(cx, cy - ry)),
+                    (fitz.Point(cx, cy - ry), fitz.Point(cx - k * rx, cy - ry), fitz.Point(cx - rx, cy - k * ry), fitz.Point(cx - rx, cy)),
+                    (fitz.Point(cx - rx, cy), fitz.Point(cx - rx, cy + k * ry), fitz.Point(cx - k * rx, cy + ry), fitz.Point(cx, cy + ry)),
+                    (fitz.Point(cx, cy + ry), fitz.Point(cx + k * rx, cy + ry), fitz.Point(cx + rx, cy + k * ry), fitz.Point(cx + rx, cy))
+                ]
+                for p0, c1, c2, p1 in beziers:
+                    shape.draw_bezier(p0 * mat, c1 * mat, c2 * mat, p1 * mat)
+            else:
+                shape.draw_oval(rect)
+            shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
+        elif obj.shape_type == EditableShape.SHAPE_CHECKMARK:
+            pts = obj.get_checkmark_points()
+            fitz_pts = [fitz.Point(p[0], p[1]) * mat if mat else fitz.Point(p[0], p[1]) for p in pts]
+            shape.draw_polyline(fitz_pts)
+            shape.finish(color=stroke, fill=None, width=obj.stroke_width, lineCap=1, lineJoin=1, closePath=False)
+        elif obj.shape_type == EditableShape.SHAPE_CROSS:
+            lines = obj.get_cross_lines()
+            for (p1, p2) in lines:
+                pt1 = fitz.Point(p1[0], p1[1]) * mat if mat else fitz.Point(p1[0], p1[1])
+                pt2 = fitz.Point(p2[0], p2[1]) * mat if mat else fitz.Point(p2[0], p2[1])
+                shape.draw_line(pt1, pt2)
+            shape.finish(color=stroke, fill=None, width=obj.stroke_width, lineCap=1, lineJoin=1, closePath=False)
+        else:
+            if mat:
+                shape.draw_quad(rect.quad * mat)
+            else:
+                shape.draw_rect(rect)
+            shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
+        shape.commit()
+    elif isinstance(obj, EditableStroke):
+        if obj.points and len(obj.points) >= 2:
+            shape = page.new_shape()
+            pts = [fitz.Point(p[0], p[1]) for p in obj.points]
+            if rot != 0.0 and obj.bbox:
+                cx = (obj.bbox[0] + obj.bbox[2]) / 2.0
+                cy = (obj.bbox[1] + obj.bbox[3]) / 2.0
+                mat = get_rotation_matrix(cx, cy, rot)
+                pts = [p * mat for p in pts]
+            shape.draw_polyline(pts)
+            stroke = tuple(float(c) for c in obj.stroke_color)
+            is_hl = getattr(obj, 'tool_type', None) in (EditableStroke.TOOL_HIGHLIGHTER, "highlighter") or obj.stroke_width >= 8.0
+            cap = 2 if is_hl else 1
+            join = 2 if is_hl else 1
+            shape.finish(
+                color=stroke,
+                width=obj.stroke_width,
+                stroke_opacity=getattr(obj, 'opacity', 1.0),
+                lineCap=cap,
+                lineJoin=join,
+                closePath=False
+            )
+            shape.commit()
+        elif obj.points and len(obj.points) == 1:
+            p = fitz.Point(obj.points[0][0], obj.points[0][1])
+            if rot != 0.0 and obj.bbox:
+                cx = (obj.bbox[0] + obj.bbox[2]) / 2.0
+                cy = (obj.bbox[1] + obj.bbox[3]) / 2.0
+                nx, ny = rotate_point(p.x, p.y, cx, cy, rot)
+                p = fitz.Point(nx, ny)
+            r = max(obj.stroke_width / 2.0, 1.0)
+            rect = fitz.Rect(p.x - r, p.y - r, p.x + r, p.y + r)
+            shape = page.new_shape()
+            is_hl = getattr(obj, 'tool_type', None) in (EditableStroke.TOOL_HIGHLIGHTER, "highlighter") or obj.stroke_width >= 8.0
+            if is_hl:
+                shape.draw_rect(rect)
+            else:
+                shape.draw_oval(rect)
+            stroke = tuple(float(c) for c in obj.stroke_color)
+            shape.finish(
+                color=stroke,
+                fill=stroke,
+                fill_opacity=getattr(obj, 'opacity', 1.0),
+                stroke_opacity=getattr(obj, 'opacity', 1.0)
+            )
+            shape.commit()
+    return True, None
+
+def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
+                 exclude_obj=None, all_strokes=None):
+    """Rebuild atomically; a failed object leaves the previous page intact."""
+    from types import SimpleNamespace
+    from .pdf_state import PdfState
+    backup = PdfState(SimpleNamespace(doc=doc, current_page_index=page_num))
+    try:
+        if not restore_page_from_snapshot(doc, page_num):
+            raise ValueError("The original page snapshot is unavailable.")
+        page = doc.load_page(page_num)
+        table_cells = [obj for obj in all_shapes if getattr(obj, 'table_id', None)]
+        other_shapes = [obj for obj in all_shapes if not getattr(obj, 'table_id', None)]
+        # Table backgrounds must be below their text; ordinary canvas layering stays intact.
+        for obj in table_cells + list(all_texts) + list(all_images) + other_shapes + list(all_strokes or []):
+            if obj.page_number == page_num and obj is not exclude_obj:
+                if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
+                    success, error = _apply_single_object_to_page(doc, page, obj)
+                    if not success:
+                        raise ValueError(error or "Could not render an object.")
+        invalidate_page_cache(doc, page_num)
+        return True, None
+    except Exception as error:
+        backup.restore(SimpleNamespace(doc=doc, current_page_index=page_num))
+        return False, str(error)
+
+
+def apply_object_edit(doc, obj):
+    """Burn a modified canvas object into its target PDF page stream."""
+    if not doc or not hasattr(obj, 'page_number') or obj.page_number is None:
+        return False, "Invalid object or page number."
+    try:
+        page = doc.load_page(obj.page_number)
+        res, err = _apply_single_object_to_page(doc, page, obj)
+        invalidate_page_cache(doc, obj.page_number)
+        return res, err
+    except Exception as e:
+        print(f"ERROR: An error occurred while applying object edit: {e}")
+        traceback.print_exc()
+        return False, f"Error while applying object edit: {e}"
+    
+def create_new_pdf(width=595, height=842, num_pages=1):
+    """Create new PDF with customizable dimensions and page count."""
+    try:
+        doc = fitz.open()
+        w = float(width) if width else 595.0
+        h = float(height) if height else 842.0
+        pages = max(1, int(num_pages)) if num_pages else 1
+        for page_index in range(pages):
+            doc.new_page(width=w, height=h)
+        return doc, None
+    except Exception as e:
+        return None, _("err_creating_new_pdf", e)
+
+def insert_blank_page(doc, page_index=None, width=None, height=None):
+    """Insert a new empty PDF page with specified width and height at target index."""
+    try:
+        if width is None or height is None:
+            if doc.page_count > 0:
+                first_page = doc[0]
+                default_width = first_page.rect.width
+                default_height = first_page.rect.height
+            else:
+                default_width = 595
+                default_height = 842
+            
+            if width is None:
+                width = default_width
+            if height is None:
+                height = default_height
+        
+        doc_id = id(doc)
+        global _page_snapshots, _page_original_links
+        if page_index is not None and 0 <= page_index <= doc.page_count:
+            target_pno = int(page_index)
+            new_snapshots = {}
+            for (did, pno), content in _page_snapshots.items():
+                if did == doc_id and pno >= target_pno:
+                    new_snapshots[(did, pno + 1)] = content
+                else:
+                    new_snapshots[(did, pno)] = content
+            _page_snapshots = new_snapshots
+
+            new_links = {}
+            for (did, pno), links in _page_original_links.items():
+                if did == doc_id and pno >= target_pno:
+                    new_links[(did, pno + 1)] = links
+                else:
+                    new_links[(did, pno)] = links
+            _page_original_links = new_links
+
+            doc.new_page(pno=target_pno, width=width, height=height)
+        else:
+            target_pno = doc.page_count
+            doc.new_page(width=width, height=height)
+
+        invalidate_page_cache(doc)
+        return True, _("success_blank_page_added", target_pno + 1)
+    
+    except Exception as e:
+        return False, _("err_adding_page", e)
+
+def duplicate_page(doc, page_index):
+    """Create an independent copy immediately after the selected page."""
+    if doc is None or not (0 <= page_index < doc.page_count):
+        return False, _("err_invalid_page_index")
+    try:
+        insert_at = page_index + 1
+        # PyMuPDF accepts an existing page index for `to`; -1 appends after
+        # the final page. Passing page_count raises "bad page number(s)".
+        doc.fullcopy_page(page_index, to=insert_at if insert_at < doc.page_count else -1)
+
+        # Page snapshots belong to page positions. The new copy gets its own
+        # snapshot when it is loaded, while later pages retain theirs.
+        doc_id = id(doc)
+        global _page_snapshots, _page_original_links
+        _page_snapshots = {
+            (did, pno + 1 if did == doc_id and pno >= insert_at else pno): content
+            for (did, pno), content in _page_snapshots.items()
+        }
+        _page_original_links = {
+            (did, pno + 1 if did == doc_id and pno >= insert_at else pno): links
+            for (did, pno), links in _page_original_links.items()
+        }
+        invalidate_page_cache(doc)
+        return True, _("success_page_duplicated", page_index + 1)
+    except Exception as e:
+        return False, _("err_duplicating_page", e)
+
+def search_page(doc, page_index, query):
+    """Return the text match rectangles on one page."""
+    if doc is None or not (0 <= page_index < doc.page_count) or not query:
+        return []
+    return doc.load_page(page_index).search_for(query)
+
+def save_page_as_pdf(doc, page_index, output_path):
+    """Write one page to a separate PDF without changing the open document."""
+    if doc is None or not (0 <= page_index < doc.page_count):
+        return False, _("err_invalid_page_index")
+    if doc.name and os.path.realpath(output_path) == os.path.realpath(doc.name):
+        return False, _("err_save_page_same_file")
+    output = None
+    try:
+        output = fitz.open()
+        output.insert_pdf(doc, from_page=page_index, to_page=page_index)
+        output.save(output_path, garbage=4, deflate=True)
+        return True, None
+    except Exception as e:
+        return False, _("err_save_page_pdf", e)
+    finally:
+        if output is not None:
+            output.close()
+
+def merge_pdf_pages(target_doc, source_pdf_path, insert_position=None):
+    """Merge PDF pages."""
+    try:
+        source_doc = fitz.open(source_pdf_path)
+        source_page_count = source_doc.page_count
+        
+        if source_page_count == 0:
+            return False, _("err_source_pdf_empty"), 0
+        
+        target_doc.insert_pdf(source_doc, from_page=0, to_page=source_page_count - 1)
+        
+        source_doc.close()
+        invalidate_page_cache(target_doc)
+        
+        return True, _("success_merged_pages", source_page_count), source_page_count
+    
+    except Exception as e:
+        return False, _("err_merging_pdf", e), 0
+
+def move_page(doc, from_index, to_index):
+    """Reorder a page from from_index to to_index in document."""
+    try:
+        if from_index < 0 or from_index >= doc.page_count:
+            return False, _("err_invalid_page_index")
+        
+        if to_index < 0 or to_index >= doc.page_count:
+            return False, _("err_invalid_target_index")
+        
+        if from_index == to_index:
+            return True, _("success_page_already_there")
+        
+        if from_index < to_index:
+            fitz_target = -1 if to_index >= doc.page_count - 1 else to_index + 1
+        else:
+            fitz_target = to_index
+        doc.move_page(from_index, fitz_target)
+        
+        doc_id = id(doc)
+        global _page_snapshots, _page_original_links
+        def _remap_index(p):
+            if from_index < to_index:
+                if p == from_index: return to_index
+                if from_index < p <= to_index: return p - 1
+            else:
+                if p == from_index: return to_index
+                if to_index <= p < from_index: return p + 1
+            return p
+
+        new_snapshots = {}
+        for (did, pno), content in _page_snapshots.items():
+            if did == doc_id:
+                new_snapshots[(did, _remap_index(pno))] = content
+            else:
+                new_snapshots[(did, pno)] = content
+        _page_snapshots = new_snapshots
+
+        new_links = {}
+        for (did, pno), links in _page_original_links.items():
+            if did == doc_id:
+                new_links[(did, _remap_index(pno))] = links
+            else:
+                new_links[(did, pno)] = links
+        _page_original_links = new_links
+
+        invalidate_page_cache(doc)
+        
+        return True, _("success_page_moved", from_index + 1, to_index + 1)
+    
+    except Exception as e:
+        return False, _("err_moving_page", e)
+
+def delete_page(doc, page_index):
+    """Remove the page at index from document."""
+    try:
+        if not doc:
+            return False, _("err_no_doc_msg_alt")
+        
+        if doc.page_count <= 1:
+            return False, _("err_cannot_delete_last_page")
+        
+        if page_index < 0 or page_index >= doc.page_count:
+            return False, _("err_invalid_page_index_val", page_index + 1)
+        
+        doc.delete_page(page_index)
+        
+        doc_id = id(doc)
+        global _page_snapshots, _page_original_links
+        new_snapshots = {}
+        for (did, pno), content in _page_snapshots.items():
+            if did == doc_id:
+                if pno == page_index:
+                    continue
+                elif pno > page_index:
+                    new_snapshots[(did, pno - 1)] = content
+                else:
+                    new_snapshots[(did, pno)] = content
+            else:
+                new_snapshots[(did, pno)] = content
+        _page_snapshots = new_snapshots
+
+        new_links = {}
+        for (did, pno), links in _page_original_links.items():
+            if did == doc_id:
+                if pno == page_index:
+                    continue
+                elif pno > page_index:
+                    new_links[(did, pno - 1)] = links
+                else:
+                    new_links[(did, pno)] = links
+            else:
+                new_links[(did, pno)] = links
+        _page_original_links = new_links
+
+        invalidate_page_cache(doc)
+        return True, _("success_page_deleted", page_index + 1)
+    
+    except Exception as e:
+        return False, _("err_deleting_page", e)
+
+def rotate_page(doc, page_index: int, angle_delta: int):
+    """Rotate the specified page by angle_delta degrees (e.g. 90 or -90)."""
+    if not doc or not (0 <= page_index < doc.page_count):
+        return False, _("err_invalid_page_index")
+    try:
+        page = doc.load_page(page_index)
+        cur_rot = getattr(page, 'rotation', 0) or 0
+        new_rot = (cur_rot + angle_delta) % 360
+        page.set_rotation(new_rot)
+        invalidate_page_cache(doc, page_index)
+        return True, new_rot
+    except Exception as e:
+        return False, str(e)
+
+def get_page_rotation(doc, page_index: int) -> int:
+    """Get the current rotation of the specified page in degrees."""
+    if not doc or not (0 <= page_index < doc.page_count):
+        return 0
+    try:
+        page = doc.load_page(page_index)
+        return getattr(page, 'rotation', 0) or 0
+    except Exception:
+        return 0
+
+def add_highlight_annotation(doc, page_index, rect_unzoomed, color=(1, 0.93, 0), is_visual=False, rotation=0.0):
+    """Add highlight annotation."""
+    if not doc or not (0 <= page_index < doc.page_count):
+        return False, "Invalid document or page index."
+    try:
+        page = doc.load_page(page_index)
+        r = fitz.Rect(*rect_unzoomed)
+        if is_visual and page.rotation % 360 != 0:
+            r = (r * (~page.rotation_matrix)).normalize()
+        if r.is_empty or not r.is_valid:
+            return False, "Empty or invalid rect."
+        rot = float(rotation) % 360.0
+        if rot != 0.0:
+            cx = (r.x0 + r.x1) / 2.0
+            cy = (r.y0 + r.y1) / 2.0
+            mat = get_rotation_matrix(cx, cy, rot)
+            annot = page.add_highlight_annot(quads=r.quad * mat)
+        else:
+            annot = page.add_highlight_annot(r)
+        annot.set_colors(stroke=color)
+        annot.update()
+        invalidate_page_cache(doc, page_index)
+        return True, None
+    except Exception as e:
+        traceback.print_exc()
+        return False, f"Highlight annotation error: {e}"
+
+def remove_highlight_annotations(doc, page_index, rect_unzoomed=None, is_visual=False):
+    """Remove highlight annotations."""
+    if not doc or not (0 <= page_index < doc.page_count):
+        return False, "Invalid document or page index."
+    try:
+        page = doc.load_page(page_index)
+        annots = page.annots()
+        removed_count = 0
+        
+        if annots:
+            target_rect = None
+            if rect_unzoomed:
+                target_rect = fitz.Rect(*rect_unzoomed)
+                if is_visual and page.rotation % 360 != 0:
+                    target_rect = (target_rect * (~page.rotation_matrix)).normalize()
+            
+            for annot in annots:
+                annot_type = annot.type[0]
+                if annot_type == 8:
+                    if target_rect is None or target_rect.intersects(annot.rect):
+                        page.delete_annot(annot)
+                        removed_count += 1
+        
+        if removed_count > 0:
+            invalidate_page_cache(doc, page_index)
+        return True, removed_count
+    except Exception as e:
+        traceback.print_exc()
+        return False, f"Error removing highlights: {e}"
+
+def get_text_in_rect(doc, page_index, rect_unzoomed):
+    """Get the text in rect."""
+    if not doc or not (0 <= page_index < doc.page_count):
+        return ""
+    try:
+        page = doc.load_page(page_index)
+        r = fitz.Rect(*rect_unzoomed)
+        if page.rotation % 360 != 0:
+            r = (r * (~page.rotation_matrix)).normalize()
+        words = page.get_text("words", clip=r, sort=True)
+        return " ".join(w[4] for w in words)
+    except Exception as e:
+        print(f"get_text_in_rect error: {e}")
+        return ""
+
+def get_word_at_pos(doc, page_index, pos_unzoomed):
+    """Get the word at pos."""
+    if not doc or not (0 <= page_index < doc.page_count):
+        return None
+    try:
+        page = doc.load_page(page_index)
+        x, y = pos_unzoomed
+        p = fitz.Point(x, y)
+        rot_mat = page.rotation_matrix if page.rotation % 360 != 0 else None
+        if rot_mat:
+            p = p * (~rot_mat)
+        words = page.get_text("words")
+        for w in words:
+            r = fitz.Rect(w[0], w[1], w[2], w[3])
+            if r.contains(p):
+                vis_r = (r * rot_mat).normalize() if rot_mat else r
+                return {'bbox': (vis_r.x0, vis_r.y0, vis_r.x1, vis_r.y1), 'text': w[4]}
+        return None
+    except Exception as e:
+        print(f"get_word_at_pos error: {e}")
+        return None
+
+def get_block_at_pos(doc, page_index, pos_unzoomed):
+    """Get the block at pos."""
+    if not doc or not (0 <= page_index < doc.page_count):
+        return None
+    try:
+        page = doc.load_page(page_index)
+        x, y = pos_unzoomed
+        p = fitz.Point(x, y)
+        rot_mat = page.rotation_matrix if page.rotation % 360 != 0 else None
+        if rot_mat:
+            p = p * (~rot_mat)
+        
+        text_dict = page.get_text("dict")
+        for block in text_dict["blocks"]:
+            if block["type"] == 0:
+                for line in block["lines"]:
+                    r = fitz.Rect(line["bbox"])
+                    if r.contains(p):
+                        line_text = "".join(span["text"] for span in line["spans"])
+                        vis_r = (r * rot_mat).normalize() if rot_mat else r
+                        return {'bbox': (vis_r.x0, vis_r.y0, vis_r.x1, vis_r.y1), 'text': line_text}
+        return None
+    except Exception as e:
+        print(f"get_block_at_pos error: {e}")
+        return None

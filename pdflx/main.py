@@ -1,0 +1,77 @@
+import sys
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+from gi.repository import Gtk, Gio, GLib, Adw
+
+from .window import PdfEditorWindow
+from . import constants
+
+class PdfEditorApplication(Adw.Application):
+    """The main GTK4/libadwaita application class for the PDF Editor."""
+    def __init__(self):
+        """Initialise application and basic menu actions."""
+        super().__init__(application_id=constants.APP_ID,
+                         flags=Gio.ApplicationFlags.HANDLES_OPEN)
+        self.window = None
+
+        quit_action = Gio.SimpleAction.new('quit', None)
+        quit_action.connect('activate', self.on_quit)
+        self.add_action(quit_action)
+        self.set_accels_for_action('app.quit', ['<Control>q'])
+
+    def do_activate(self):
+        """Activate the main application window."""
+        if not self.window:
+            self.window = PdfEditorWindow(application=self)
+        self.window.present()
+
+    def do_open(self, files, n_files, hint):
+        """Handle opening PDF files passed via CLI or file manager."""
+        if not self.window:
+             self.activate()
+
+        if n_files > 0:
+            filepath = files[0].get_path()
+            if filepath:
+                GLib.idle_add(self.window.load_document, filepath)
+
+        self.window.present()
+
+
+    def on_quit(self, action, param):
+        """Safely quit the application and prompt for unsaved changes."""
+        if self.window:
+             if self.window.check_unsaved_changes():
+                  return
+             self.window.close_document()
+
+        print("Quitting application.")
+        self.quit()
+
+def main():
+    """Run the Adw application."""
+    import os, locale, logging
+    # PDFLX_DEBUG=1 enables diagnostic logging; the default stays quiet.
+    logging.basicConfig(level=logging.DEBUG if os.environ.get("PDFLX_DEBUG") else logging.WARNING,
+                        format="%(levelname)s %(name)s: %(message)s")
+    logging.getLogger("pyhanko").setLevel(logging.ERROR)
+    from .i18n import get_language
+    lang = get_language()
+    if lang == "tr":
+        os.environ["LANGUAGE"] = "tr_TR:tr"
+        os.environ["LC_MESSAGES"] = "tr_TR.UTF-8"
+        try:
+            locale.setlocale(locale.LC_MESSAGES, "tr_TR.UTF-8")
+        except Exception:
+            try:
+                locale.setlocale(locale.LC_MESSAGES, "tr")
+            except Exception:
+                pass
+
+    GLib.set_prgname("pdflx")
+    GLib.set_application_name("pdfLX")
+    Gtk.Window.set_default_icon_name(constants.APP_ICON)
+    Adw.init()
+    app = PdfEditorApplication()
+    return app.run(sys.argv)

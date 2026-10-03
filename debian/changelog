@@ -1,0 +1,42 @@
+pdflx (0.3) noble; urgency=medium
+
+  * Consistent libadwaita dialog design with live previews.
+  * New print dialog with sheet preview and printing options.
+  * Rebuilt Image Tools inspector and element Properties dialog.
+  * Stamp designer with templates, details line, borders, and saved templates.
+  * Fix text overflow after font size changes and a font-change crash.
+
+ -- pdfLX contributors <pdflx@localhost>  Sat, 03 Oct 2026 00:00:00 +0200
+
+pdflx (0.2) noble; urgency=medium
+
+  * Grouped menus and libadwaita dialogs; Pages and Protect sidebar menus.
+  * Page tools: insert, extract, split, collate, blank removal, resize, N-up,
+    booklet, overlays, headers/footers and Bates numbering, labels, boxes.
+  * Protection: passwords and permissions, sanitization, hidden-text scan,
+    rasterizing, signature verification with PKCS#7 details, and append-only
+    saving that keeps existing signatures valid.
+  * Conversion and export: other formats and images to PDF, optimization,
+    recolouring, page images, structured text, tables, diagrams.
+  * Review: native markup annotations, replies, review states, filters,
+    import/export, comment summaries, annotation flattening.
+  * Forms: password, comb, and multi-select fields, border styles, field
+    hierarchy, and a JavaScript inspector.
+  * Authoring: Markdown/HTML documents with linked contents, formatted text,
+    watermarks, shapes, node editing, and CSV mail merge.
+  * Viewer: two-page and book layouts, presentation mode, measurement,
+    side-by-side pane, reading colours, faster rendering for large zoom.
+  * Autosave crash recovery, remembered positions, recent-file thumbnails,
+    and the pdflx-cli batch tool.
+  * Form scripts (calculation, validation, formatting) via MuPDF's sandboxed
+    JavaScript engine, a Format & Calculation tab, date picker, submit/URL/
+    print/JavaScript buttons, and FDF/XFDF/JSON/CSV form data import/export.
+  * Requires libadwaita 1.5 or newer.
+
+ -- pdfLX contributors <pdflx@localhost>  Fri, 02 Oct 2026 00:00:00 +0200
+
+pdflx (0.1) bookworm; urgency=medium
+
+  * Initial pdfLX release with refreshed branding, About window, and app icon.
+
+ -- pdfLX contributors <pdflx@localhost>  Wed, 30 Sep 2026 00:00:00 +0200

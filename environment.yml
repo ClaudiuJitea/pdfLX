@@ -1,0 +1,19 @@
+name: pdfLX
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pygobject>=3.50.0
+  - gtk4
+  - libadwaita
+  - pymupdf>=1.26
+  - numpy
+  - cairo
+  - pycairo
+  - pip
+  - pip:
+      - Pillow
+      - pdf2docx>=0.5.13
+      - pyHanko>=0.25
+      - -e .

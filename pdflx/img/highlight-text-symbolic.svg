@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <!-- Marker highlighter pen body -->
+  <g fill="currentColor">
+    <!-- Barrel / Cap -->
+    <path d="M 10.6 1.8 C 11.2 1.2 12.1 1.2 12.7 1.8 L 14.2 3.3 C 14.8 3.9 14.8 4.8 14.2 5.4 L 9.2 10.4 L 5.6 6.8 Z"/>
+    <!-- Collar -->
+    <path d="M 5.1 7.3 L 8.7 10.9 L 7.5 12.1 L 3.9 8.5 Z"/>
+    <!-- Chisel Tip -->
+    <path d="M 3.4 9.0 L 7.0 12.6 L 5.2 14.4 L 2.0 14.4 L 1.6 11.0 Z"/>
+    <!-- Highlight bar underneath -->
+    <rect x="0.5" y="13.5" width="15" height="2.2" rx="1.1" opacity="0.6"/>
+  </g>
+</svg>

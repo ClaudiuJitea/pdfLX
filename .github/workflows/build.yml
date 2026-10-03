@@ -1,0 +1,108 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            deb_arch: amd64
+            runner: ubuntu-22.04
+          - arch: aarch64
+            deb_arch: arm64
+            runner: ubuntu-22.04-arm
+
+    runs-on: ${{ matrix.runner }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libgirepository1.0-dev \
+            libglib2.0-dev \
+            libcairo2-dev \
+            libadwaita-1-dev \
+            libgtk-4-dev \
+            libfuse2 \
+            python3 \
+            python3-venv \
+            python3-pip \
+            python3-gi \
+            python3-gi-cairo \
+            gir1.2-gtk-4.0 \
+            gir1.2-adw-1 \
+            debhelper \
+            rsync \
+            zip \
+            p7zip-full
+
+      - name: Run build script
+        run: |
+          chmod +x build-appimage.sh
+          ./build-appimage.sh
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-artifacts-${{ matrix.arch }}
+          path: |
+            *.AppImage
+            *.tar.gz
+            *.tar.xz
+            *.zip
+            *.7z
+            *.deb
+            *.dsc
+            *.buildinfo
+            *.changes
+          if-no-files-found: warn
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Inspect release assets
+        run: |
+          echo "=== Collected Release Assets ==="
+          ls -lh release-assets/
+
+      - name: Create release and upload assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-assets/*.AppImage
+            release-assets/*.tar.gz
+            release-assets/*.tar.xz
+            release-assets/*.zip
+            release-assets/*.7z
+            release-assets/*.deb
+            release-assets/*.dsc
+            release-assets/*.buildinfo
+            release-assets/*.changes
+          draft: false
+          prerelease: false

@@ -1,0 +1,575 @@
+import gi
+gi.require_version('GdkPixbuf', '2.0')
+from gi.repository import GObject, GdkPixbuf, Gio
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any, Tuple
+import os
+import uuid
+from .utils import normalize_color
+import re
+import copy
+
+FLAG_SUPERSCRIPT = 1       # bit 0
+FLAG_ITALIC = 1 << 1       # bit 1
+FLAG_SERIF = 1 << 2        # bit 2
+FLAG_MONOSPACED = 1 << 3   # bit 3
+FLAG_BOLD = 1 << 4         # bit 4
+
+BASE14_FALLBACK_MAP = {
+    'helvetica': 'helv', 'arial': 'helv', 'sans': 'helv', 'verdana': 'helv', 'tahoma': 'helv',
+    'liberation sans': 'helv', 'liberationsans': 'helv', 'dejavusans': 'helv', 'notosans': 'helv',
+    'carlito': 'helv', 'cantarell': 'helv', 'ubuntu': 'helv',
+    'times': 'timr', 'timesnewroman': 'timr', 'serif': 'timr', 'georgia': 'timr',
+    'liberation serif': 'timr', 'liberationserif': 'timr', 'dejavuserif': 'timr', 'notoserif': 'timr',
+    'caladea': 'timr', 'roman': 'timr',
+    'courier': 'cour', 'couriernew': 'cour', 'mono': 'cour', 'monospace': 'cour',
+    'consolas': 'cour', 'liberation mono': 'cour', 'liberationmono': 'cour',
+    'dejavusansmono': 'cour', 'notosansmono': 'cour', 'fixed': 'cour'
+}
+
+class EditableText:
+    """Data model representing extracted or newly added editable text on a PDF page."""
+    def __init__(self, x, y, text, font_size=11, font_family="Liberation Sans",
+                 color=(0, 0, 0), span_data=None, is_new=False, baseline=None, rotation=0.0, page_number=None, alignment="left"):
+        self.x = x
+        self.y = y
+        self.text = text
+        self.original_text = text if not is_new else ""
+        self.font_size = float(font_size)
+        self.is_new = is_new
+        self.rotation = float(rotation) % 360.0
+        self.original_rotation = self.rotation
+
+        self.original_bbox = span_data.get("bbox") if span_data else None
+
+        pdf_font_name_original = font_family or "Liberation Sans"
+        flags = 0
+        
+        if span_data:
+            pdf_font_name_original = span_data.get('font', pdf_font_name_original)
+            flags = span_data.get('flags', 0)
+
+        self.font_family_original = pdf_font_name_original 
+
+        self.is_bold = bool(flags & FLAG_BOLD) 
+        self.is_italic = bool(flags & FLAG_ITALIC)
+        self.is_serif = bool(flags & FLAG_SERIF)
+        self.is_monospace = bool(flags & FLAG_MONOSPACED)
+        self.is_underline = False
+        self.is_strikethrough = False
+        self.alignment = alignment or "left"
+
+        name_after_prefix_removal = re.sub(r'^[A-Z]{6}\+', '', pdf_font_name_original)
+        if ',' in name_after_prefix_removal:
+            name_after_prefix_removal = name_after_prefix_removal.split(',')[0]
+        
+        potential_family_name = re.sub(r'[-_ ]?(PSMT|PS|MT)$', '', name_after_prefix_removal, flags=re.IGNORECASE).strip('-_ ')
+        if not potential_family_name:
+            potential_family_name = name_after_prefix_removal
+        
+        style_patterns = [
+            (r"(BoldItalic|BoldOblique|BdI|Z|BI)$", "BoldItalic"),
+            (r"(Bold|Bd|Heavy|Black|DemiBold|SmBd|SemiBold)$", "Bold"),
+            (r"(Italic|It|Oblique|Kursiv|I|Obl)$", "Italic"),
+            (r"(Regular|Roman|Normal|Medium|Book|Rg|Text)$", "Regular")
+        ]
+
+        detected_style_parts = [] 
+
+        temp_name = potential_family_name
+        for pattern, style_tag in style_patterns:
+            m = re.search(r"([-_ ]?" + pattern + r")$", temp_name, re.IGNORECASE)
+            if m:
+                matched_str = m.group(0).lower()
+                if "roman" in matched_str and ("times" in temp_name.lower()):
+                    pass
+                else:
+                    if style_tag == "BoldItalic":
+                        if not self.is_bold: self.is_bold = True
+                        if not self.is_italic: self.is_italic = True
+                        detected_style_parts.extend(["Bold", "Italic"])
+                    elif style_tag == "Bold":
+                        if not self.is_bold: self.is_bold = True
+                        detected_style_parts.append("Bold")
+                    elif style_tag == "Italic":
+                        if not self.is_italic: self.is_italic = True
+                        detected_style_parts.append("Italic")
+                    temp_name = temp_name[:m.start()].strip("-_ ")
+        
+        cleaned_family_name = temp_name if temp_name else name_after_prefix_removal
+
+        cleaned_family_name = re.sub(r'[-_ ]?(PSMT|PS|MT)$', '', cleaned_family_name, flags=re.IGNORECASE).strip('-_ ')
+
+        cleaned_family_name_spaced = re.sub(r"(\w)([A-Z])", r"\1 \2", cleaned_family_name)
+        base_name = ' '.join(word.capitalize() for word in cleaned_family_name_spaced.replace('-', ' ').replace('_', ' ').split())
+        base_name = base_name.replace("Deja Vu", "DejaVu")
+        
+        if base_name in ("Times New", "Times"):
+            base_name = "Times New Roman"
+
+        lower_orig = pdf_font_name_original.lower()
+        if any(kw in lower_orig for kw in ('mono', 'typewriter', 'courier', 'console', 'consolas', 'fixed')):
+            self.is_monospace = True
+        if any(kw in lower_orig for kw in ('serif', 'times', 'roman', 'georgia', 'cambria', 'garamond', 'minion')):
+            self.is_serif = True
+
+        self.font_fallback_used = False
+        lower_base = base_name.lower().replace(" ", "")
+        sans_aliases = ("arial", "helvetica", "calibri")
+        serif_aliases = ("times", "timesnew", "timesnewroman")
+        mono_aliases = ("courier", "couriernew")
+        
+        if lower_base in sans_aliases:
+            base_name = "Liberation Sans"
+        elif lower_base in serif_aliases:
+            base_name = "Liberation Serif"
+        elif lower_base in mono_aliases:
+            base_name = "Liberation Mono"
+            
+        self.font_family_base = base_name
+        
+        if not self.font_family_base or self.font_family_base == "Unknown":
+            self.font_family_base = "Liberation Sans"
+            self.font_fallback_used = "Liberation Sans"
+        
+        lower_base = self.font_family_base.lower()
+        if not self.is_bold and any(s in lower_base for s in ["bold", "heavy", "black"]):
+             pass 
+        if not self.is_italic and any(s in lower_base for s in ["italic", "oblique"]):
+             pass
+
+        self.original_is_bold = self.is_bold
+        self.original_is_italic = self.is_italic
+        normalized_for_base14 = re.sub(r'[^a-zA-Z0-9]', '', self.font_family_base).lower()
+        matched_base14 = None
+        for name_key in sorted(BASE14_FALLBACK_MAP.keys(), key=len, reverse=True):
+            if name_key.replace(" ", "") in normalized_for_base14:
+                matched_base14 = BASE14_FALLBACK_MAP[name_key]
+                break
+        if matched_base14:
+            self.pdf_fontname_base14 = matched_base14
+        elif self.is_monospace:
+            self.pdf_fontname_base14 = 'cour'
+        elif self.is_serif:
+            self.pdf_fontname_base14 = 'timr'
+        else:
+            self.pdf_fontname_base14 = 'helv'
+        
+        pdf_color = color
+        if span_data and 'color' in span_data:
+            pdf_color = span_data['color']
+
+        self.color = normalize_color(pdf_color)
+        self.original_color = self.color
+
+        self.selected = False
+        self.editing = False
+        self.span_data = span_data
+        self.modified = is_new 
+
+        if span_data and "bbox" in span_data:
+            self.bbox = span_data["bbox"]
+        else: 
+            estimated_width = len(self.text) * self.font_size * 0.6 
+            self.bbox = (self.x, self.y, self.x + estimated_width, self.y + self.font_size)
+
+        if baseline is not None:
+            self.baseline = float(baseline)
+        elif span_data and "origin" in span_data:
+            self.baseline = float(span_data["origin"][1])
+        elif self.bbox: 
+            self.baseline = float(self.bbox[3] - (self.font_size * 0.1)) 
+        else: 
+            self.baseline = float(self.y + (self.font_size * 0.9))
+
+        self.original_baseline = self.baseline
+        self.page_number = page_number
+        self.dragging = False
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+        
+        self.text_spans = []
+        
+    def set_rotation(self, angle):
+        """Set rotation in degrees (0-360)."""
+        self.rotation = float(angle) % 360.0
+
+    @property
+    def is_link(self):
+        """Return True if text contains a web URL."""
+        return bool(self.text and re.search(r'https?://', self.text))
+
+    def split_at_range(self, start_char, end_char):
+        """Split text into segments before, inside, and after a character selection range."""
+        text = self.text
+        if start_char < 0: start_char = 0
+        if end_char > len(text): end_char = len(text)
+        if start_char >= end_char:
+            return [self]
+        parts = []
+        if start_char > 0:
+            pre = copy.deepcopy(self)
+            pre.text = text[:start_char]
+            pre.original_text = text[:start_char]
+            pre.is_new = True
+            x1, y1, x2, y2 = self.bbox
+            ratio = start_char / max(len(text), 1)
+            pre.bbox = (x1, y1, x1 + (x2 - x1) * ratio, y2)
+            pre.original_bbox = pre.bbox
+            pre.original_rotation = getattr(self, 'rotation', 0.0)
+            pre.x, pre.y = pre.bbox[0], pre.bbox[1]
+            parts.append(pre)
+        mid = copy.deepcopy(self)
+        mid.text = text[start_char:end_char]
+        mid.original_text = text[start_char:end_char]
+        mid.is_new = True
+        x1, y1, x2, y2 = self.bbox
+        r1 = start_char / max(len(text), 1)
+        r2 = end_char / max(len(text), 1)
+        mid.bbox = (x1 + (x2 - x1) * r1, y1, x1 + (x2 - x1) * r2, y2)
+        mid.original_bbox = mid.bbox
+        mid.original_rotation = getattr(self, 'rotation', 0.0)
+        mid.x, mid.y = mid.bbox[0], mid.bbox[1]
+        parts.append(mid)
+        if end_char < len(text):
+            post = copy.deepcopy(self)
+            post.text = text[end_char:]
+            post.original_text = text[end_char:]
+            post.is_new = True
+            x1, y1, x2, y2 = self.bbox
+            ratio = end_char / max(len(text), 1)
+            post.bbox = (x1 + (x2 - x1) * ratio, y1, x2, y2)
+            post.original_bbox = post.bbox
+            post.original_rotation = getattr(self, 'rotation', 0.0)
+            post.x, post.y = post.bbox[0], post.bbox[1]
+            parts.append(post)
+        return parts
+
+class EditableImage:
+    """Data model representing an extracted or inserted image on a PDF page."""
+    def __init__(self, bbox, page_number, xref, image_bytes, is_new=False, rotation=0.0):
+        self.bbox = bbox
+        self.original_bbox = bbox
+        self.page_number = page_number
+        self.xref = xref
+        self.image_bytes = image_bytes
+        self.is_new = is_new
+        self.selected = False
+        self.modified = False
+        self.rotation = float(rotation) % 360.0
+        self.original_rotation = self.rotation
+        from .image_editing import DEFAULTS
+        self.__dict__.update(DEFAULTS)
+
+    def set_rotation(self, angle):
+        """Set rotation in degrees (0-360)."""
+        self.rotation = float(angle) % 360.0
+
+class EditableShape:
+    """Data model representing vector shapes such as rectangle, ellipse, checkmark, cross."""
+    SHAPE_RECTANGLE = "rectangle"
+    SHAPE_ELLIPSE = "ellipse"
+    SHAPE_POLYGON = "polygon"
+    SHAPE_CHECKMARK = "checkmark"
+    SHAPE_CROSS = "cross"
+    
+    def __init__(self, shape_type, bbox, fill_color=(255, 255, 255), 
+                 stroke_color=(0, 0, 0), stroke_width=2.0, page_number=None, is_new=False, is_transparent=True, rotation=0.0):
+        self.shape_type = shape_type
+        self.bbox = bbox
+        self.original_bbox = bbox
+        
+        self.fill_color = normalize_color(fill_color)
+        self.stroke_color = normalize_color(stroke_color)
+        self.original_fill_color = self.fill_color
+        self.original_stroke_color = self.stroke_color
+        
+        self.stroke_width = float(stroke_width)
+        self.original_stroke_width = self.stroke_width
+        self.is_transparent = is_transparent
+        self.rotation = float(rotation) % 360.0
+        self.original_rotation = self.rotation
+        
+        self.page_number = page_number
+        self.is_new = is_new
+        self.selected = False
+        self.modified = is_new
+        
+        self.dragging = False
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+        
+        self.x = bbox[0]
+        self.y = bbox[1]
+    
+    def get_width(self):
+        """Get the width."""
+        return self.bbox[2] - self.bbox[0]
+    
+    def get_height(self):
+        """Get the height."""
+        return self.bbox[3] - self.bbox[1]
+    
+    def set_size(self, width, height):
+        """Set the size."""
+        x1, y1, _, _ = self.bbox
+        self.bbox = (x1, y1, x1 + width, y1 + height)
+    
+    def set_position(self, x, y):
+        """Set the position."""
+        width = self.get_width()
+        height = self.get_height()
+        self.bbox = (x, y, x + width, y + height)
+        self.x = x
+        self.y = y
+
+    def set_rotation(self, angle):
+        """Set rotation in degrees (0-360)."""
+        self.rotation = float(angle) % 360.0
+
+    def get_checkmark_points(self):
+        """Calculate vector vertex points for checkmark shape within its bounding box."""
+        x1, y1, x2, y2 = self.bbox
+        w = max(x2 - x1, 1.0)
+        h = max(y2 - y1, 1.0)
+        return [
+            (x1 + 0.15 * w, y1 + 0.50 * h),
+            (x1 + 0.38 * w, y1 + 0.85 * h),
+            (x1 + 0.85 * w, y1 + 0.18 * h)
+        ]
+
+    def get_cross_lines(self):
+        """Calculate vector line segments for cross shape within its bounding box."""
+        x1, y1, x2, y2 = self.bbox
+        w = max(x2 - x1, 1.0)
+        h = max(y2 - y1, 1.0)
+        return [
+            ((x1 + 0.18 * w, y1 + 0.18 * h), (x2 - 0.18 * w, y2 - 0.18 * h)),
+            ((x2 - 0.18 * w, y1 + 0.18 * h), (x1 + 0.18 * w, y2 - 0.18 * h))
+        ]
+
+class EditableStroke:
+    """Data model representing freehand pen and highlighter vector drawings."""
+    TOOL_PEN = "pen"
+    TOOL_HIGHLIGHTER = "highlighter"
+
+    def __init__(self, points=None, stroke_color=(0, 0, 0), stroke_width=2.0,
+                 opacity=1.0, tool_type="pen", page_number=None, is_new=True, rotation=0.0):
+        self.points = list(points) if points else []
+        self.stroke_color = normalize_color(stroke_color)
+        self.original_stroke_color = self.stroke_color
+        self.stroke_width = float(stroke_width)
+        self.original_stroke_width = self.stroke_width
+        self.opacity = float(opacity)
+        self.tool_type = tool_type
+        self.page_number = page_number
+        self.is_new = is_new
+        self.selected = False
+        self.modified = is_new
+        self.rotation = float(rotation) % 360.0
+        self.original_rotation = self.rotation
+        self.dragging = False
+        self.drag_start_x = 0
+        self.drag_start_y = 0
+        self.x = 0
+        self.y = 0
+        self.bbox = (0, 0, 0, 0)
+        self.original_bbox = (0, 0, 0, 0)
+        if self.points:
+            self.recalculate_bbox()
+
+    def add_point(self, x, y):
+        """Add point to stroke and recalculate bbox."""
+        self.points.append((float(x), float(y)))
+        self.recalculate_bbox()
+
+    def recalculate_bbox(self):
+        """Recalculate bounding box from points with stroke width padding."""
+        if not self.points:
+            self.bbox = (0, 0, 0, 0)
+            self.original_bbox = self.bbox
+            self.x, self.y = 0, 0
+            return
+        xs = [p[0] for p in self.points]
+        ys = [p[1] for p in self.points]
+        pad = max(self.stroke_width / 2.0, 2.0)
+        min_x, max_x = min(xs) - pad, max(xs) + pad
+        min_y, max_y = min(ys) - pad, max(ys) + pad
+        self.bbox = (min_x, min_y, max_x, max_y)
+        self.original_bbox = self.bbox
+        self.x = min_x
+        self.y = min_y
+
+    def get_width(self):
+        """Get the width."""
+        return self.bbox[2] - self.bbox[0]
+
+    def get_height(self):
+        """Get the height."""
+        return self.bbox[3] - self.bbox[1]
+
+    def scale_to_bbox(self, new_bbox, orig_bbox, orig_points=None):
+        """Scale stroke points proportionally to match new bounding box."""
+        if not self.points:
+            self.bbox = new_bbox
+            self.x, self.y = new_bbox[0], new_bbox[1]
+            return
+        pts_to_scale = orig_points if orig_points else self.points
+        ox1, oy1, ox2, oy2 = orig_bbox
+        nx1, ny1, nx2, ny2 = new_bbox
+        ow = max(ox2 - ox1, 1e-3)
+        oh = max(oy2 - oy1, 1e-3)
+        nw = max(nx2 - nx1, 1e-3)
+        nh = max(ny2 - ny1, 1e-3)
+        new_pts = []
+        for px, py in pts_to_scale:
+            rx = (px - ox1) / ow
+            ry = (py - oy1) / oh
+            new_pts.append((nx1 + rx * nw, ny1 + ry * nh))
+        self.points = new_pts
+        self.recalculate_bbox()
+        self.bbox = new_bbox
+        self.x = new_bbox[0]
+        self.y = new_bbox[1]
+
+    def set_position(self, new_x, new_y):
+        """Shift all points to a new (x, y) origin."""
+        dx = new_x - self.x
+        dy = new_y - self.y
+        self.points = [(px + dx, py + dy) for px, py in self.points]
+        self.recalculate_bbox()
+
+    def set_rotation(self, angle):
+        """Set rotation in degrees (0-360)."""
+        self.rotation = float(angle) % 360.0
+
+class PdfPage(GObject.GObject):
+    """GObject model for PDF page index and thumbnail in sidebar list."""
+    __gtype_name__ = 'PdfPage'
+    index = GObject.Property(type=int)
+    thumbnail = GObject.Property(type=GdkPixbuf.Pixbuf)
+
+    def __init__(self, index, thumbnail):
+        super().__init__(index=index, thumbnail=thumbnail)
+
+
+@dataclass
+class DocumentSession:
+    """Encapsulates the state of an open PDF document session.
+
+    Manages the document object, file paths, undo history, navigation,
+    zoom level, edit mode, and page object collections.
+    """
+    doc: Any = None
+    pdf_path: Optional[str] = None
+    original_file_path: Optional[str] = None
+    # File name proposed for unsaved generated documents (conversions, splits, OCR).
+    suggested_name: Optional[str] = None
+    session_id: str = field(default_factory=lambda: str(uuid.uuid4()))
+
+    # Navigation & View
+    current_page_index: int = 0
+    zoom_level: float = 1.0
+    fit_on_load: bool = False
+    fit_to_view: bool = False
+    scroll_mode: str = "page"
+    view_mode: bool = True
+
+    # Modification & Undo
+    is_modified: bool = False
+    allow_incremental_save: bool = True
+    is_repaired_file: bool = False
+    can_edit: bool = True
+    can_copy: bool = True
+    can_print: bool = True
+    undo_manager: Any = None
+
+    # Page models & Object collections
+    pages_model: Any = None
+    editable_texts: List[Any] = field(default_factory=list)
+    editable_images: List[Any] = field(default_factory=list)
+    editable_shapes: List[Any] = field(default_factory=list)
+    editable_strokes: List[Any] = field(default_factory=list)
+
+    page_objects: Dict[int, Any] = field(default_factory=dict)
+
+    # Selected objects
+    selected_text: Any = None
+    selected_image: Any = None
+    selected_shape: Any = None
+    selected_stroke: Any = None
+
+    # View mode text selection
+    view_sel_start: Optional[Tuple[float, float]] = None
+    view_sel_rect: Optional[Tuple[float, float, float, float]] = None
+    view_selected_text: str = ""
+    view_selection_quads: List[Any] = field(default_factory=list)
+    view_drag_active: bool = False
+
+    # Word selection mode
+    selected_word: Optional[str] = None
+    selected_word_start_char: Optional[int] = None
+    selected_word_end_char: Optional[int] = None
+    word_selection_mode: bool = False
+
+    # Page render caches
+    page_cache: Dict[int, Any] = field(default_factory=dict)
+
+    # Tab integration
+    tab_page: Any = None
+    bin_widget: Any = None
+
+    def __post_init__(self):
+        """Ensure Gio.ListStore for pages_model if not provided."""
+        if self.pages_model is None:
+            try:
+                self.pages_model = Gio.ListStore(item_type=PdfPage)
+            except Exception:
+                self.pages_model = None
+
+    @property
+    def title(self) -> str:
+        """Return the document filename or 'Untitled Document'."""
+        if self.pdf_path:
+            return os.path.basename(self.pdf_path)
+        if self.suggested_name:
+            return self.suggested_name
+        return "Untitled Document"
+
+    @property
+    def display_title(self) -> str:
+        """Return title prefixed with '*' if document has unsaved modifications."""
+        t = self.title
+        return f"*{t}" if self.is_modified else t
+
+    @property
+    def page_count(self) -> int:
+        """Return the number of pages in the open document."""
+        if self.doc:
+            try:
+                return len(self.doc)
+            except Exception:
+                return 0
+        return 0
+
+    def close(self):
+        """Cleanly close the underlying document and free session resources."""
+        if self.doc is not None:
+            try:
+                self.doc.close()
+            except Exception:
+                pass
+            self.doc = None
+        self.can_edit = True
+        self.can_copy = True
+        self.can_print = True
+        self.page_cache.clear()
+        self.page_objects.clear()
+        self.editable_texts.clear()
+        self.editable_images.clear()
+        self.editable_shapes.clear()
+        self.editable_strokes.clear()
+        self.selected_text = None
+        self.selected_image = None
+        self.selected_shape = None
+        self.selected_stroke = None

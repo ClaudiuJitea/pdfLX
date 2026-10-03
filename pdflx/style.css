@@ -1,0 +1,754 @@
+/* pdfLX application stylesheet (loaded by window._apply_css). */
+.signature-pad {
+    background-color: #ffffff;
+    border-radius: 8px;
+    border: 1px solid alpha(@theme_fg_color, 0.15);
+}
+
+.pdflx-about .about-product-name {
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -1px;
+}
+
+.pdflx-about .about-version {
+    border-radius: 999px;
+    padding: 4px 12px;
+    font-size: 11px;
+    font-weight: 600;
+    color: @accent_color;
+    background-color: alpha(@accent_bg_color, 0.12);
+}
+
+.pdflx-about .about-description {
+    font-size: 14px;
+}
+
+/* Document header: quiet navigation, centered title, clear actions. */
+.top-headerbar {
+    min-height: 56px;
+    padding: 0 4px 0 12px;
+    border-bottom: 1px solid alpha(@theme_fg_color, 0.08);
+    background-color: @theme_bg_color;
+    box-shadow: none;
+}
+
+.top-headerbar button {
+    min-height: 34px;
+    padding-top: 0;
+    padding-bottom: 0;
+    border-radius: 8px;
+    box-shadow: none;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.top-headerbar button.header-icon-btn {
+    min-width: 34px;
+    padding: 0;
+    background-color: transparent;
+    border-color: transparent;
+}
+
+.top-headerbar button.header-text-btn {
+    padding: 0 12px;
+}
+
+.top-headerbar button.flat:hover {
+    background-color: alpha(@theme_fg_color, 0.07);
+}
+
+.top-headerbar button:disabled {
+    background-color: transparent;
+    border-color: transparent;
+    box-shadow: none;
+    opacity: 0.35;
+}
+
+.top-headerbar .header-history {
+    margin-left: 8px;
+    padding-left: 8px;
+    border-left: 1px solid alpha(@theme_fg_color, 0.1);
+}
+
+.top-headerbar .header-document-title .title {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.top-headerbar .header-document-title .subtitle {
+    font-size: 11px;
+    opacity: 0.55;
+}
+
+.top-headerbar button.header-save-btn {
+    background-color: alpha(@theme_fg_color, 0.055);
+    border: 1px solid alpha(@theme_fg_color, 0.12);
+}
+
+.top-headerbar button.header-save-btn:hover {
+    background-color: alpha(@theme_fg_color, 0.1);
+}
+
+.top-headerbar button.header-save-btn:disabled {
+    background-color: transparent;
+    border-color: alpha(@theme_fg_color, 0.08);
+}
+
+.top-headerbar button.header-action-btn {
+    padding: 0 14px;
+    border: 1px solid transparent;
+}
+
+.top-headerbar button.header-action-btn.suggested-action {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+}
+
+.top-headerbar button.header-action-btn.suggested-action:hover {
+    background-color: mix(@accent_bg_color, @theme_fg_color, 0.1);
+}
+
+/* Compact document tabs with full-size close targets. */
+.document-tabbar tabbox {
+    min-height: 28px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+
+.document-tabbar tab {
+    min-height: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+}
+
+.document-tabbar .start-action,
+.document-tabbar .end-action {
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+
+.document-tabbar .end-action button {
+    min-height: 28px;
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+/* Toolbars - Slim & Clean */
+.toolbar {
+    padding: 2px 8px;
+    min-height: 28px;
+    background-color: alpha(@theme_bg_color, 0.98);
+    border-bottom: 1px solid alpha(currentColor, 0.08);
+}
+
+.toolbar button {
+    min-height: 26px;
+    padding: 2px 5px;
+}
+
+.tool-context-label {
+    font-size: 12px;
+    font-weight: 700;
+    color: @theme_fg_color;
+    padding: 0 6px;
+}
+
+.toolbar-hint {
+    color: alpha(currentColor, 0.62);
+    font-size: 12px;
+}
+
+.search-toolbar {
+    padding: 5px 10px;
+    border-bottom: 1px solid alpha(currentColor, 0.08);
+    background-color: @theme_bg_color;
+}
+
+/* Smooth Hairline Separators & Edge Lines */
+separator {
+    background-color: alpha(currentColor, 0.08);
+    min-width: 1px;
+    min-height: 1px;
+}
+
+paned > separator {
+    background-color: transparent;
+    border-right: 1px solid alpha(currentColor, 0.08);
+    min-width: 1px;
+    margin: 0;
+    padding: 0;
+    transition: background-color 140ms ease, border-color 140ms ease;
+}
+
+paned > separator:hover {
+    background-color: alpha(@accent_color, 0.35);
+    border-right-color: @accent_color;
+}
+
+.pdf-view {
+    background-color: #525252;
+}
+
+/* Quiet footer with readable status and compact control groups. */
+.statusbar {
+    padding: 0 14px;
+    min-height: 40px;
+    border-top: 1px solid alpha(@theme_fg_color, 0.09);
+    background-color: @theme_bg_color;
+    font-size: 12px;
+}
+
+.statusbar .status-control-group {
+    border-radius: 8px;
+    padding: 0 2px;
+    background-color: alpha(@theme_fg_color, 0.035);
+    border: 1px solid alpha(@theme_fg_color, 0.08);
+}
+
+.statusbar button.status-btn {
+    min-height: 28px;
+    min-width: 28px;
+    padding: 0;
+    border-radius: 6px;
+    background-color: transparent;
+    border: 1px solid transparent;
+    box-shadow: none;
+}
+
+.statusbar button.status-btn:hover {
+    background-color: alpha(@theme_fg_color, 0.08);
+}
+
+.statusbar button.status-btn:disabled {
+    opacity: 0.3;
+    background-color: transparent;
+}
+
+.status-doc-label {
+    font-size: 12px;
+    color: alpha(@theme_fg_color, 0.65);
+}
+
+.status-doc-icon {
+    color: alpha(@theme_fg_color, 0.45);
+}
+
+.status-page-label, .status-zoom-label {
+    font-size: 12px;
+    font-weight: 600;
+    color: alpha(@theme_fg_color, 0.85);
+    padding: 0 8px;
+    font-feature-settings: "tnum";
+}
+
+.compact-page-slider {
+    min-height: 18px;
+    margin: 0 8px 0 4px;
+    padding: 0;
+}
+
+.compact-page-slider trough {
+    min-height: 3px;
+    border-radius: 3px;
+    background-color: alpha(@theme_fg_color, 0.12);
+}
+
+.compact-page-slider highlight {
+    background-color: @accent_bg_color;
+    border-radius: 3px;
+}
+
+.compact-page-slider slider {
+    min-height: 10px;
+    min-width: 10px;
+    margin: -4px;
+    border-radius: 9999px;
+}
+
+.page-preview-sidebar .sidebar-actions-row {
+    margin: 0 12px 10px;
+    padding: 3px;
+    border-radius: 9px;
+    background-color: alpha(@theme_fg_color, 0.035);
+    border: 1px solid alpha(@theme_fg_color, 0.08);
+}
+
+.page-preview-sidebar button.sidebar-action-btn {
+    min-height: 30px;
+    min-width: 24px;
+    padding: 0;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    box-shadow: none;
+}
+
+.page-preview-sidebar button.sidebar-action-btn:hover {
+    background-color: alpha(@theme_fg_color, 0.08);
+}
+
+.page-preview-sidebar button.sidebar-action-btn:disabled {
+    opacity: 0.3;
+}
+
+.page-preview-sidebar button.page-delete-btn:hover {
+    color: @error_color;
+    background-color: alpha(@error_color, 0.1);
+}
+
+.page-preview-sidebar .sidebar-section-header {
+    padding: 14px 16px 10px;
+    margin: 0;
+}
+
+.page-preview-sidebar .sidebar-section-title {
+    font-size: 13px;
+    font-weight: 700;
+}
+
+.page-preview-sidebar .sidebar-count-badge {
+    min-width: 16px;
+    padding: 3px 6px;
+}
+
+.page-preview-sidebar button.pages-hide-button {
+    min-width: 20px;
+    min-height: 20px;
+    padding: 2px;
+}
+
+.page-preview-footer {
+    padding: 12px 16px;
+    border-top: 1px solid alpha(@theme_fg_color, 0.08);
+}
+
+.page-preview-footer .page-preview-name {
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.page-preview-footer .page-preview-details {
+    font-size: 11px;
+    color: alpha(@theme_fg_color, 0.6);
+}
+
+popover > .box {
+    padding: 8px;
+}
+
+frame.inline-editor-frame {
+    border: 0;
+    border-radius: 0;
+    background-color: transparent;
+    box-shadow: none;
+    padding: 0;
+}
+
+textview.inline-editor-tv,
+textview.inline-editor-tv text {
+    min-height: 0;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+    background-color: transparent;
+    padding: 0;
+}
+
+/* Editor Sidebar - Smooth Edge Line */
+.editor-sidebar {
+    background-color: @theme_bg_color;
+    border-right: 1px solid alpha(currentColor, 0.08);
+}
+
+.sidebar-section-header {
+    margin-top: 2px;
+    margin-bottom: 2px;
+    padding: 2px 4px;
+}
+
+.sidebar-section-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: -0.2px;
+    color: @theme_fg_color;
+}
+
+.sidebar-count-badge {
+    font-size: 10px;
+    font-weight: 700;
+    padding: 1px 6px;
+    border-radius: 9999px;
+    background-color: alpha(currentColor, 0.08);
+    color: alpha(currentColor, 0.65);
+}
+
+/* Consistent tool rail and color controls. */
+.tools-side-toolbar {
+    background-color: @theme_bg_color;
+    border-right: 1px solid alpha(@theme_fg_color, 0.08);
+    padding: 6px 5px;
+    min-width: 40px;
+}
+
+.tools-side-toolbar separator {
+    margin: 6px 7px;
+    background-color: alpha(@theme_fg_color, 0.1);
+    min-height: 1px;
+}
+
+.side-tool-btn {
+    border-radius: 9px;
+    padding: 0;
+    min-height: 36px;
+    min-width: 36px;
+    border: 1px solid transparent;
+    box-shadow: none;
+    transition: background-color 120ms ease;
+}
+
+.side-tool-btn:hover {
+    background-color: alpha(@theme_fg_color, 0.07);
+}
+
+.side-tool-btn.active, .side-tool-btn:checked {
+    background-color: alpha(@accent_bg_color, 0.18);
+    color: @accent_color;
+    border-color: alpha(@accent_bg_color, 0.25);
+    box-shadow: none;
+}
+
+.side-tool-btn.active:hover, .side-tool-btn:checked:hover {
+    background-color: alpha(@accent_bg_color, 0.25);
+}
+
+.side-tool-btn:disabled {
+    opacity: 0.35;
+    background-color: transparent;
+    border-color: transparent;
+}
+
+.color-picker-btn, .toolbar button.color-picker-btn {
+    padding: 2px 8px;
+    min-height: 28px;
+    border-radius: 7px;
+    background-color: alpha(@theme_fg_color, 0.035);
+    border: 1px solid alpha(@theme_fg_color, 0.12);
+    box-shadow: none;
+}
+
+.color-picker-btn:hover, .toolbar button.color-picker-btn:hover {
+    background-color: alpha(@theme_fg_color, 0.08);
+    border-color: alpha(@theme_fg_color, 0.22);
+}
+
+.tools-side-toolbar button.color-picker-btn {
+    padding: 0;
+    min-width: 36px;
+    min-height: 36px;
+    margin-top: 2px;
+}
+
+/* Tool Buttons in Toolbar (Icon-only, hover tooltip) */
+.toolbar-tool-btn {
+    border-radius: 6px;
+    padding: 5px 7px;
+    min-height: 30px;
+    min-width: 30px;
+    transition: all 120ms ease;
+}
+
+.toolbar-tool-btn.active, .toolbar-tool-btn:checked {
+    background-color: @accent_color;
+    color: @accent_fg_color;
+    box-shadow: 0 1px 4px alpha(@accent_color, 0.35);
+}
+
+.toolbar-tool-btn.active:hover, .toolbar-tool-btn:checked:hover {
+    background-color: mix(@accent_color, white, 0.12);
+}
+
+.tool-button {
+    border-radius: 8px;
+    padding: 6px 8px;
+    min-height: 34px;
+    border: 1px solid alpha(currentColor, 0.06);
+    background-color: alpha(currentColor, 0.03);
+    transition: all 140ms ease;
+}
+
+.tool-button:hover {
+    background-color: alpha(currentColor, 0.08);
+    border-color: alpha(currentColor, 0.14);
+}
+
+.tool-button.active {
+    background-color: @accent_color;
+    color: @accent_fg_color;
+    border-color: transparent;
+    font-weight: 600;
+    box-shadow: 0 2px 6px alpha(@accent_color, 0.35);
+}
+
+.tool-button.active label {
+    color: @accent_fg_color;
+    font-weight: 600;
+}
+
+.tool-btn-label {
+    font-size: 12px;
+    font-weight: 500;
+}
+
+/* Page cards expand with the panel and preserve each page's ratio. */
+.thumbnail-gridview {
+    background: transparent;
+    padding: 8px;
+}
+
+.thumbnail-gridview > child {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 10px;
+    padding: 8px;
+    margin: 0 0 8px;
+    transition: background-color 150ms ease;
+}
+
+.thumbnail-gridview > child:hover {
+    background-color: alpha(@theme_fg_color, 0.045);
+}
+
+.thumbnail-gridview > child:selected {
+    background-color: alpha(@accent_bg_color, 0.09);
+    border-color: alpha(@accent_bg_color, 0.25);
+}
+
+.thumbnail-paper-frame {
+    background-color: #ffffff;
+    border-radius: 3px;
+    border: 1px solid rgba(0, 0, 0, 0.16);
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.15);
+    padding: 0;
+}
+
+.thumbnail-gridview > child:selected .thumbnail-paper-frame {
+    border-color: @accent_bg_color;
+    box-shadow: 0 0 0 1px @accent_bg_color, 0 2px 5px rgba(0, 0, 0, 0.15);
+}
+
+.thumbnail-badge-box {
+    margin-top: 8px;
+}
+
+.thumbnail-page-label {
+    font-size: 11px;
+    font-weight: 600;
+    color: alpha(@theme_fg_color, 0.65);
+}
+
+.thumbnail-gridview > child:selected .thumbnail-page-label {
+    color: @accent_color;
+}
+
+/* ── Shared dialog & inspector language ──────────────────────────────────
+   Every dialog is an Adw.Dialog (Cancel · Title · Action) holding titled
+   boxed lists; floating inspectors reuse the same rows inside a card. */
+.pdflx-section-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.4px;
+    color: alpha(@window_fg_color, 0.62);
+    margin-left: 4px;
+    margin-bottom: 2px;
+}
+
+.pdflx-form > list.boxed-list row,
+.pdflx-inspector list.boxed-list row {
+    min-height: 46px;
+}
+
+.pdflx-form spinbutton,
+.pdflx-inspector spinbutton {
+    min-height: 32px;
+}
+
+.pdflx-form entry {
+    min-height: 32px;
+}
+
+scrolledwindow.pdflx-textarea {
+    border-radius: 8px;
+    background-color: alpha(@window_fg_color, 0.05);
+    border: 1px solid alpha(@window_fg_color, 0.1);
+}
+
+scrolledwindow.pdflx-textarea textview,
+scrolledwindow.pdflx-textarea textview text {
+    background-color: transparent;
+}
+
+/* Tabs inside dialogs read as a segmented control. */
+notebook.pdflx-tabs > header {
+    background: none;
+    border: none;
+    box-shadow: none;
+    padding: 0;
+}
+
+notebook.pdflx-tabs > header > tabs {
+    padding: 3px;
+    border-radius: 10px;
+    background-color: alpha(@window_fg_color, 0.06);
+}
+
+notebook.pdflx-tabs > header > tabs > tab {
+    min-height: 28px;
+    padding: 0 14px;
+    border-radius: 7px;
+    border: none;
+    box-shadow: none;
+    font-weight: 600;
+    color: alpha(@window_fg_color, 0.7);
+}
+
+notebook.pdflx-tabs > header > tabs > tab:hover {
+    background-color: alpha(@window_fg_color, 0.06);
+}
+
+notebook.pdflx-tabs > header > tabs > tab:checked {
+    background-color: @card_bg_color;
+    color: @window_fg_color;
+    box-shadow: 0 1px 3px alpha(black, 0.18);
+}
+
+notebook.pdflx-tabs > stack {
+    background: none;
+}
+
+/* Live preview column beside dialog settings. */
+.pdflx-preview-pane {
+    padding: 18px;
+    background-color: alpha(@window_fg_color, 0.025);
+}
+
+.pdflx-preview-stage {
+    border-radius: 10px;
+    padding: 14px;
+    background-color: #525252;
+    box-shadow: inset 0 0 0 1px alpha(black, 0.12);
+}
+
+.pdflx-print-preview {
+    background-color: #525252;
+}
+
+.pdflx-print-preview label.dim-label,
+.pdflx-print-preview label {
+    color: alpha(white, 0.85);
+}
+
+.pdflx-print-preview button.flat {
+    color: white;
+}
+
+.pdflx-print-preview button.flat:hover {
+    background-color: alpha(white, 0.12);
+}
+
+/* Floating inspector card (image tools and similar panels). */
+.pdflx-inspector {
+    background-color: @dialog_bg_color;
+    border-radius: 14px;
+    border: 1px solid alpha(@window_fg_color, 0.08);
+    box-shadow: 0 10px 32px alpha(black, 0.28), 0 2px 6px alpha(black, 0.16);
+}
+
+.pdflx-inspector-header {
+    padding: 12px 10px 10px 14px;
+}
+
+.pdflx-inspector-badge {
+    min-width: 32px;
+    min-height: 32px;
+    border-radius: 9px;
+    color: @accent_color;
+    background-color: alpha(@accent_bg_color, 0.14);
+}
+
+.pdflx-inspector-toolbar {
+    padding: 0 14px 12px;
+    border-bottom: 1px solid alpha(@window_fg_color, 0.08);
+}
+
+.pdflx-inspector-toolbar button {
+    min-height: 32px;
+    min-width: 32px;
+}
+
+.pdflx-inspector-content {
+    padding: 12px 14px 14px;
+}
+
+.pdflx-inspector expander-widget row.header,
+.pdflx-inspector row.expander row {
+    min-height: 44px;
+}
+
+/* Stamp designer */
+flowbox.pdflx-stamp-gallery {
+    background: none;
+}
+
+flowbox.pdflx-stamp-gallery > flowboxchild.pdflx-stamp-tile {
+    padding: 0;
+    border-radius: 12px;
+    background-color: #ffffff;
+    border: 1px solid alpha(black, 0.1);
+    color: #3d3d3d;
+    transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+
+flowbox.pdflx-stamp-gallery > flowboxchild.pdflx-stamp-tile:hover {
+    border-color: alpha(@accent_bg_color, 0.55);
+}
+
+flowbox.pdflx-stamp-gallery > flowboxchild.pdflx-stamp-tile:selected {
+    background-color: #ffffff;
+    border-color: @accent_bg_color;
+    box-shadow: 0 0 0 2px @accent_bg_color;
+}
+
+flowbox.pdflx-stamp-gallery > flowboxchild.pdflx-stamp-tile.custom {
+    border-style: dashed;
+}
+
+.pdflx-stamp-paper {
+    border-radius: 12px;
+    background-color: #ffffff;
+    box-shadow: 0 1px 3px alpha(black, 0.2), inset 0 0 0 1px alpha(black, 0.06);
+}
+
+button.pdflx-swatch {
+    min-width: 22px;
+    min-height: 22px;
+    padding: 0;
+    border-radius: 999px;
+    box-shadow: inset 0 0 0 1px alpha(black, 0.15);
+}
+
+button.pdflx-swatch:checked {
+    box-shadow: 0 0 0 2px @window_bg_color, 0 0 0 4px @accent_bg_color;
+}
+
+button.swatch-red { background: rgb(204, 26, 31); }
+button.swatch-green { background: rgb(26, 133, 61); }
+button.swatch-blue { background: rgb(33, 82, 184); }
+button.swatch-orange { background: rgb(219, 112, 0); }
+button.swatch-purple { background: rgb(115, 51, 158); }
+button.swatch-gray { background: rgb(102, 107, 117); }
+button.swatch-black { background: rgb(26, 26, 31); }
+
+button.pdflx-shape-button {
+    min-width: 34px;
+    padding: 4px 4px;
+}

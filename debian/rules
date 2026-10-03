@@ -1,0 +1,48 @@
+#!/usr/bin/make -f
+
+PKGDDIR=debian/pdflx
+INSTALL_DIR=$(PKGDDIR)/opt/pdflx
+BIN_DIR=$(PKGDDIR)/usr/bin
+
+ICON_NAME=pdflx
+ICON_SOURCE_PATH=pdflx/img/pdflx.svg
+ICON_SIZE_DIR=scalable
+ICON_INSTALL_DIR=$(PKGDDIR)/usr/share/icons/hicolor/$(ICON_SIZE_DIR)/apps
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	# PyMuPDF and numpy are installed at package-install time via debian/postinst
+	# using a per-host Python venv, so no build-time pip vendoring is needed.
+
+override_dh_install:
+	install -d $(INSTALL_DIR)
+	cp -r pdflx $(INSTALL_DIR)/
+	find $(INSTALL_DIR) -type d -name __pycache__ -prune -exec rm -rf {} +
+	install -m 644 run_pdflx.py $(INSTALL_DIR)/
+
+	install -d $(BIN_DIR)
+	printf '#!/bin/sh\nexec /opt/pdflx/.venv/bin/python3 /opt/pdflx/run_pdflx.py "$$@"\n' \
+		> $(BIN_DIR)/pdflx
+	chmod 755 $(BIN_DIR)/pdflx
+	printf '#!/bin/sh\nexec env PYTHONPATH=/opt/pdflx /opt/pdflx/.venv/bin/python3 -m pdflx.cli "$$@"\n' \
+		> $(BIN_DIR)/pdflx-cli
+	chmod 755 $(BIN_DIR)/pdflx-cli
+
+	install -d $(PKGDDIR)/usr/share/applications
+	install -m 644 debian/pdflx.desktop $(PKGDDIR)/usr/share/applications/
+
+	install -d $(ICON_INSTALL_DIR)
+	install -m 644 $(ICON_SOURCE_PATH) $(ICON_INSTALL_DIR)/$(ICON_NAME).svg
+	install -d $(PKGDDIR)/usr/share/icons/hicolor/256x256/apps
+	install -m 644 pdflx/img/pdflx.png $(PKGDDIR)/usr/share/icons/hicolor/256x256/apps/pdflx.png
+
+override_dh_strip:
+
+override_dh_shlibdeps:
+
+override_dh_auto_clean:
+	dh_auto_clean
+	rm -rf __pycache__
+	find pdflx -name __pycache__ -type d -prune -exec rm -rf {} +

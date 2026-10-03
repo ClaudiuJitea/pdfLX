@@ -1,0 +1,69 @@
+#!/bin/sh
+set -e
+
+INSTALL_DIR="/opt/pdflx"
+VENV_DIR="${INSTALL_DIR}/.venv"
+
+case "$1" in
+    configure)
+        echo "pdflx: Setting up Python virtual environment..."
+
+        python3 -m venv --system-site-packages "${VENV_DIR}"
+
+        # The venv sees system packages (for GTK). pip would report conflicts with
+        # unrelated system packages (e.g. python3-openssl pinning an older
+        # cryptography); pdfLX's own copies stay inside this venv, so skip that noise.
+        REQUIREMENTS="PyMuPDF>=1.26.0 numpy Pillow pdf2docx>=0.5.13 pyHanko>=0.25"
+        WHEELS="${INSTALL_DIR}/wheels"
+        installed=0
+        if [ -d "${WHEELS}" ]; then
+            echo "pdflx: Installing bundled dependencies (offline)..."
+            # shellcheck disable=SC2086
+            if "${VENV_DIR}/bin/pip" install --quiet --no-warn-conflicts --no-index --find-links "${WHEELS}" ${REQUIREMENTS}; then
+                installed=1
+            else
+                echo "pdflx: Bundled wheels do not match this system; falling back to PyPI." >&2
+            fi
+        fi
+        if [ "${installed}" -eq 0 ]; then
+            echo "pdflx: Installing PDF, export, and signing dependencies (internet access required)..."
+            # shellcheck disable=SC2086
+            "${VENV_DIR}/bin/pip" install --quiet --no-warn-conflicts ${REQUIREMENTS}
+        fi
+
+        "${VENV_DIR}/bin/python3" - <<'PY'
+import gi
+gi.require_version('Gtk', '4.0')
+gi.require_version('Adw', '1')
+from gi.repository import Gtk, Adw, GdkPixbuf, Pango, PangoCairo
+if (Adw.get_major_version(), Adw.get_minor_version()) < (1, 5):
+    raise SystemExit('pdfLX needs libadwaita 1.5 or newer.')
+import cairo
+import pymupdf
+import numpy
+from PIL import Image
+from pdf2docx import Converter
+from pyhanko.sign import signers
+PY
+
+        if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+            gtk-update-icon-cache -q -t -f /usr/share/icons/hicolor || true
+        fi
+        if command -v update-desktop-database >/dev/null 2>&1; then
+            update-desktop-database -q /usr/share/applications || true
+        fi
+
+        echo "pdflx: Setup complete."
+        ;;
+
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+
+exit 0
