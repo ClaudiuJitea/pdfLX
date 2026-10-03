@@ -35,18 +35,18 @@ and print or export — all locally, with no cloud services.
 
 ## Features
 
-| | |
+| Area | What you can do |
 |---|---|
-| ✏️ **Edit content** | Edit existing text with fonts, sizes, colours, and alignment; add text boxes; move, resize, tilt, crop, and style images; draw shapes and freehand strokes. |
-| 🗂️ **Organise pages** | Insert, extract, split, reorder, rotate, crop, resize, N-up and booklet layouts, headers/footers, Bates numbering, and page labels. |
-| 💬 **Review** | Sticky notes, highlights, underline/strikeout, callouts and shapes, replies and review states, comment summaries, and redaction with preview. |
-| 🔖 **Stamps** | A stamp designer with 14 templates, custom colours and shapes, date/author fields, and saved templates. |
-| 📝 **Forms** | Create text fields, checkboxes, dropdowns, lists, radio groups, and buttons; fill on the page; calculations and formatting; import/export form data. |
-| ✍️ **Signatures** | Draw or import a handwritten signature, sign with a `.p12`/`.pfx` certificate, and verify existing signatures. |
-| 🔐 **Protect** | Passwords and permissions, sanitisation, hidden-text scan, and append-only saving that keeps signatures valid. |
-| 🖨️ **Print & export** | A print dialog with live sheet preview; export to Word (DOCX), text, Markdown, HTML, images, and SVG. |
-| 📖 **Read** | Continuous or page-by-page scrolling, two-page and book layouts, presentation mode, night and sepia reading, and search. |
-| ⚙️ **Automate** | Batch processing and the `pdflx-cli` command-line tool for merge, optimise, Bates numbering, verification, and more. |
+| **Edit content** | Edit existing text with fonts, sizes, colours, and alignment; add text boxes; move, resize, tilt, crop, and style images; draw shapes and freehand strokes. |
+| **Organise pages** | Insert, extract, split, reorder, rotate, crop, resize, N-up and booklet layouts, headers/footers, Bates numbering, and page labels. |
+| **Review** | Sticky notes, highlights, underline/strikeout, callouts and shapes, replies and review states, comment summaries, and redaction with preview. |
+| **Stamps** | A stamp designer with 14 templates, custom colours and shapes, date/author fields, and saved templates. |
+| **Forms** | Create text fields, checkboxes, dropdowns, lists, radio groups, and buttons; fill on the page; calculations and formatting; import/export form data. |
+| **Signatures** | Draw or import a handwritten signature, sign with a `.p12`/`.pfx` certificate, and verify existing signatures. |
+| **Protect** | Passwords and permissions, sanitisation, hidden-text scan, and append-only saving that keeps signatures valid. |
+| **Print & export** | A print dialog with live sheet preview; export to Word (DOCX), text, Markdown, HTML, images, and SVG. |
+| **Read** | Continuous or page-by-page scrolling, two-page and book layouts, presentation mode, night and sepia reading, and search. |
+| **Automate** | Batch processing and the `pdflx-cli` command-line tool for merge, optimise, Bates numbering, verification, and more. |
 
 See the [user guide](docs/USER_GUIDE.md) for the full feature reference.
 
