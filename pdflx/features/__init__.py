@@ -346,59 +346,65 @@ class FeatureController:
 
     # -- menus ---------------------------------------------------------------
     def build_main_menu(self):
-        """The header-bar menu, grouped into submenus by task."""
+        """The header-bar menu: everyday file actions first, then task submenus in order of use."""
         menu = Gio.Menu()
-        menu.append_section(None, _section(
-            (_('btn_new_doc'), 'new'), (_('btn_open_doc'), 'open'),
-            (_('menu_open_other_format'), 'open_convert'), (_('menu_images_to_pdf'), 'images_to_pdf'),
-            (_('menu_compose'), 'compose_document')))
-        menu.append_section(None, _section(
-            (_('menu_save_as'), 'save_as'), (_('menu_save_incremental'), 'save_incremental'),
-            (_('menu_save_page_pdf'), 'save_page_pdf'), (_('print_tip').rsplit(' (', 1)[0], 'print')))
-
-        tools = Gio.Menu()
-        tools.append_submenu(_('menu_group_document'), _submenu(
-            _section((_('menu_document_info'), 'document_info'), (_('menu_properties'), 'document_properties'),
-                     (_('menu_viewer_settings'), 'viewer_settings')),
-            _section((_('menu_bookmarks'), 'bookmarks'), (_('menu_generate_bookmarks'), 'generate_bookmarks'),
-                     (_('menu_links'), 'links'), (_('menu_attachments'), 'attachments'), (_('menu_layers'), 'layers')),
-            _section((_('menu_einvoice'), 'attach_einvoice'), (_('menu_portfolio'), 'create_portfolio'),
-                     (_('menu_object_inspector'), 'object_inspector'))))
-        tools.append_submenu(_('menu_group_pages'), self.pages_menu())
-        tools.append_submenu(_('menu_group_annotate'), _submenu(
-            _section((_('tool_add_review'), 'review'), (_('menu_add_markup'), 'annot_add'),
-                     (_('tool_add_note'), 'sticky_note'), (_('tool_add_stamp'), 'stamp'),
-                     (_('tool_comments'), 'comments')),
-            _section((_('menu_export_annotations'), 'annot_export'), (_('menu_import_annotations'), 'annot_import'),
-                     (_('menu_comment_summary'), 'comment_summary')),
-            _section((_('menu_flatten_annotations'), 'flatten_annotations'))))
-        tools.append_submenu(_('menu_group_insert'), _submenu(
-            _section((_('menu_rich_text'), 'rich_text'), (_('menu_draw_shape'), 'draw_shape'),
-                     (_('menu_node_editor'), 'node_editor'), (_('table_add'), 'add_table'),
-                     (_('table_paste'), 'paste_table'), (_('signature_add'), 'add_signature')),
-            _section((_('tool_create_field'), 'create_field'), (_('menu_form_fields'), 'form_fields'),
-                     (_('menu_form_structure'), 'form_structure'), (_('tool_flatten'), 'flatten_forms')),
-            _section((_('menu_form_import'), 'form_import_data'), (_('menu_form_export'), 'form_export_data'))))
-        tools.append_submenu(_('menu_group_protect'), self.protect_menu())
-        tools.append_submenu(_('menu_group_tools'), _submenu(
-            _section((_('menu_advanced_search'), 'advanced_search'), (_('menu_compare'), 'compare'),
-                     (_('menu_mail_merge'), 'mail_merge'), (_('menu_batch'), 'batch_process'),
-                     (_('menu_text_style'), 'text_style'), (_('menu_snapshot'), 'snapshot')),
-            _section((_('menu_images_manager'), 'images_manager'), (_('menu_ocr'), 'ocr'),
-                     (_('menu_optimize'), 'optimize'), (_('menu_recolor'), 'recolor'))))
-        menu.append_section(None, tools)
+        create = _submenu(_section((_('menu_open_other_format'), 'open_convert'),
+                                   (_('menu_images_to_pdf'), 'images_to_pdf'),
+                                   (_('menu_compose'), 'compose_document')))
+        files = _section((_('btn_new_doc'), 'new'), (_('btn_open_doc'), 'open'))
+        files.append_submenu(_('menu_group_create'), create)
+        menu.append_section(None, files)
 
         export = Gio.Menu()
         export.append_section(None, _section(
             (_('menu_export_as'), 'export_as'), (_('export_format_docx'), 'export_docx'),
             (_('export_format_txt'), 'export_txt'), (_('menu_export_structured'), 'export_structured')))
         export.append_section(None, _section(
-            (_('menu_export_range'), 'export_range'), (_('menu_export_images'), 'export_images'),
-            (_('menu_export_page_svg'), 'export_page_svg'), (_('menu_export_diagram'), 'export_diagram'),
-            (_('menu_export_vector_svg'), 'export_vector_svg')))
+            (_('menu_save_page_pdf'), 'save_page_pdf'), (_('menu_export_range'), 'export_range'),
+            (_('menu_export_images'), 'export_images'), (_('menu_export_page_svg'), 'export_page_svg'),
+            (_('menu_export_diagram'), 'export_diagram'), (_('menu_export_vector_svg'), 'export_vector_svg')))
         export.append_section(None, _section(
             (_('menu_extract_images'), 'extract_images'), (_('menu_extract_tables'), 'extract_tables'),
             (_('menu_export_tables'), 'export_tables')))
+        export.append_section(None, _section((_('menu_save_incremental'), 'save_incremental')))
+        saving = _section((_('menu_save_as'), 'save_as'), (_('print_tip').rsplit(' (', 1)[0], 'print'))
+        saving.append_submenu(_('menu_export'), export)
+        menu.append_section(None, saving)
+
+        tasks = Gio.Menu()
+        tasks.append_submenu(_('menu_group_edit'), _submenu(
+            _section((_('replace_title') + '…', 'find_replace'), (_('menu_rich_text'), 'rich_text'),
+                     (_('table_add'), 'add_table'), (_('table_paste'), 'paste_table')),
+            _section((_('menu_draw_shape'), 'draw_shape'), (_('menu_node_editor'), 'node_editor')),
+            _section((_('menu_text_style'), 'text_style'), (_('menu_images_manager'), 'images_manager'),
+                     (_('menu_recolor'), 'recolor'))))
+        tasks.append_submenu(_('menu_group_forms'), _submenu(
+            _section((_('tool_fill_forms'), 'form_fields'), (_('tool_create_field'), 'create_field'),
+                     (_('menu_form_structure'), 'form_structure')),
+            _section((_('menu_form_import'), 'form_import_data'), (_('menu_form_export'), 'form_export_data')),
+            _section((_('tool_flatten'), 'flatten_forms'))))
+        tasks.append_submenu(_('menu_group_annotate'), _submenu(
+            _section((_('tool_add_note'), 'sticky_note'), (_('tool_add_stamp'), 'stamp'),
+                     (_('menu_add_markup'), 'annot_add'), (_('tool_add_review'), 'review'),
+                     (_('tool_comments'), 'comments')),
+            _section((_('menu_comment_summary'), 'comment_summary'), (_('menu_export_annotations'), 'annot_export'),
+                     (_('menu_import_annotations'), 'annot_import')),
+            _section((_('menu_flatten_annotations'), 'flatten_annotations'))))
+        tasks.append_submenu(_('menu_group_pages'), self.pages_menu())
+        tasks.append_submenu(_('menu_group_document'), _submenu(
+            _section((_('menu_properties'), 'document_properties'), (_('menu_document_info'), 'document_info'),
+                     (_('menu_viewer_settings'), 'viewer_settings')),
+            _section((_('menu_bookmarks'), 'bookmarks'), (_('menu_generate_bookmarks'), 'generate_bookmarks'),
+                     (_('menu_links'), 'links'), (_('menu_attachments'), 'attachments'), (_('menu_layers'), 'layers')),
+            _section((_('menu_einvoice'), 'attach_einvoice'), (_('menu_portfolio'), 'create_portfolio'))))
+        tasks.append_submenu(_('menu_group_protect'), self.protect_menu())
+        tasks.append_submenu(_('menu_group_tools'), _submenu(
+            _section((_('menu_advanced_search'), 'advanced_search'), (_('menu_compare'), 'compare'),
+                     (_('menu_ocr'), 'ocr'), (_('menu_optimize'), 'optimize')),
+            _section((_('menu_mail_merge'), 'mail_merge'), (_('menu_batch'), 'batch_process'),
+                     (_('menu_snapshot'), 'snapshot'), (_('menu_object_inspector'), 'object_inspector'))))
+        menu.append_section(None, tasks)
+
         view = Gio.Menu()
         modes = Gio.Menu()
         for key in pdf_handler.READER_MODES:
@@ -412,19 +418,22 @@ class FeatureController:
             item.set_action_and_target_value('win.page_layout', GLib.Variant.new_string(key))
             layouts.append_item(item)
         view.append_section(_('menu_page_layout'), layouts)
+        guides = Gio.Menu()
+        guides.append(_('menu_alignment_guides'), 'win.alignment_guides')
+        view.append_section(None, guides)
         view.append_section(None, _section((_('menu_presentation'), 'presentation'),
                                            (_('menu_side_viewer'), 'side_viewer'),
                                            (_('menu_measure'), 'measure'),
                                            (_('menu_measure_settings'), 'measure_settings')))
-        share = Gio.Menu()
-        share.append_submenu(_('menu_export'), export)
-        share.append_submenu(_('menu_view'), view)
-        menu.append_section(None, share)
-
         prefs = Gio.Menu()
         prefs.append(_('menu_confirm_delete'), 'win.confirm_delete')
         prefs.append(_('menu_form_scripts'), 'win.form_scripts')
-        menu.append_section(None, prefs)
+        prefs.append(_('ai_settings') + '…', 'win.ai_settings')
+        settings = Gio.Menu()
+        settings.append_submenu(_('menu_view'), view)
+        settings.append_submenu(_('menu_preferences'), prefs)
+        menu.append_section(None, settings)
+
         about = Gio.Menu()
         about.append(_('menu_quick_guide'), 'win.quick_guide')
         about.append(_('menu_about'), 'win.about')
@@ -435,6 +444,7 @@ class FeatureController:
     def pages_menu(self):
         return _submenu(
             _edit_mode_section(),
+            _section((_('organize_title') + '…', 'organize_pages'),),
             _section((_('menu_insert_pages'), 'insert_pages'), (_('menu_extract_pages'), 'extract_pages'),
                      (_('menu_split_document'), 'split_document')),
             _section((_('menu_reverse_pages'), 'reverse_pages'), (_('menu_collate_pages'), 'collate_pages'),
@@ -449,7 +459,8 @@ class FeatureController:
     def protect_menu(self):
         return _submenu(
             _edit_mode_section(),
-            _section((_('menu_security'), 'security'), (_('menu_verify_signatures'), 'verify_signatures'),
-                     (_('signature_digital'), 'sign_certificate')),
+            _section((_('signature_add'), 'add_signature'), (_('signature_digital'), 'sign_certificate'),
+                     (_('menu_verify_signatures'), 'verify_signatures')),
+            _section((_('menu_security'), 'security'),),
             _section((_('tool_redact'), 'redact'), (_('menu_sanitize'), 'sanitize'),
                      (_('menu_hidden_text'), 'hidden_text'), (_('menu_rasterize'), 'rasterize')))

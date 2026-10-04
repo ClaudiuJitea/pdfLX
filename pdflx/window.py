@@ -908,6 +908,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         right_actions.add_css_class("header-actions")
         header.pack_end(right_actions)
 
+        self.ai_button = Gtk.Button.new_from_icon_name("editor-ai-symbolic")
+        self.ai_button.set_tooltip_text(f"{_('ai_title')} (Ctrl+K)")
+        self.ai_button.add_css_class("flat")
+        icon_button(self.ai_button)
+        self.ai_button.connect("clicked", lambda *_: self.ai_bar.toggle())
+        right_actions.append(self.ai_button)
+
         self.search_button = Gtk.Button.new_from_icon_name("edit-find-symbolic")
         self.search_button.set_tooltip_text(_("search_document_tip"))
         self.search_button.add_css_class("flat")
@@ -976,6 +983,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             toggle.connect('toggled', lambda _button: self._on_search_changed(self.search_entry))
             self.search_option_buttons[key] = toggle
             search_box.append(toggle)
+        replace_button = Gtk.Button(label=_("replace_button"), tooltip_text=_("replace_title") + ' (Ctrl+H)',
+                                    action_name='win.find_replace')
+        replace_button.add_css_class('flat')
+        search_box.append(replace_button)
         more = Gtk.Button(icon_name='view-more-horizontal-symbolic', tooltip_text=_("menu_advanced_search"),
                           action_name='win.advanced_search')
         more.add_css_class('flat')
@@ -1098,6 +1109,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             child = child.get_next_sibling()
         from .image_editor_dialog import ImageToolsController
         self.image_tools=ImageToolsController(self,self.document_surface)
+        from .organize_pages import OrganizePages
+        self.organize_pages=OrganizePages(self,self.document_surface)
+        from .shape_tools import ShapeTools
+        self.shape_tools=ShapeTools(self)
+        self.shape_tools.populate_menu(self._shapes_grid,self._shapes_popover)
+        from .ai.panel import AiBar
+        self.ai_bar=AiBar(self,self.document_surface)
 
         self.stack.add_named(self.tab_view, "editor")
 
@@ -1400,6 +1418,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         page_actions_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=2, halign=Gtk.Align.FILL)
         page_actions_box.add_css_class("sidebar-actions-row")
 
+        self.organize_pages_button = Gtk.Button(icon_name="editor-organize-symbolic", action_name="win.organize_pages",
+                                                tooltip_text=_("organize_title"))
+        page_actions_box.append(self.organize_pages_button)
+
         self.sidebar_add_page_button = Gtk.Button.new_from_icon_name("list-add-symbolic")
         self.sidebar_add_page_button.set_tooltip_text(_("add_page_tip"))
         self.sidebar_add_page_button.connect("clicked", self.on_add_page)
@@ -1551,11 +1573,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         forms_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4,
                             margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
         for action, key, icon in (
+            ('form_fields', 'tool_fill_forms', 'editor-match-style-symbolic'),
             ('create_field', 'tool_create_field', 'editor-form-symbolic'),
-            ('form_fields', 'tool_fill_forms', 'editor-text-symbolic'),
             ('flatten_forms', 'tool_flatten', 'editor-flatten-symbolic'),
         ):
-            button = Gtk.Button(action_name=f'win.{action}')
+            button = Gtk.Button(action_name=f'win.{action}', tooltip_text=_(key + '_tip'))
             button.add_css_class('flat')
             row = Gtk.Box(spacing=10)
             row.append(Gtk.Image(icon_name=icon, pixel_size=20))
@@ -1573,23 +1595,28 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.tools_sidebar.append(self.bookmarks_tool_button)
 
         self.document_tools_button = Gtk.MenuButton(icon_name='editor-document-tools-symbolic',
-                                                    tooltip_text=_("menu_document_tools"))
+                                                    tooltip_text=_("menu_more_tools"))
         self.document_tools_button.add_css_class('flat')
         _size_tool_btn(self.document_tools_button)
         tools_popover = Gtk.Popover(position=Gtk.PositionType.RIGHT)
         tools_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4,
                             margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
-        for action, label, icon in (
-            ('sticky_note', 'tool_add_note', 'editor-review-symbolic'),
-            ('stamp', 'tool_add_stamp', 'editor-stamp-symbolic'),
-            ('redact', 'tool_redact', 'editor-redact-symbolic'),
+        for entry in (
+            'menu_section_review',
             ('review', 'tool_add_review', 'editor-review-symbolic'),
             ('comments', 'tool_comments', 'editor-comments-symbolic'),
+            'menu_section_page_look',
             ('decorate', 'tool_decorate', 'editor-watermark-symbolic'),
             ('crop', 'tool_crop', 'editor-crop-symbolic'),
-            ('create_field', 'tool_create_field', 'editor-form-symbolic'),
-            ('flatten_forms', 'tool_flatten', 'editor-flatten-symbolic'),
+            'menu_section_protect',
+            ('redact', 'tool_redact', 'editor-redact-symbolic'),
         ):
+            if isinstance(entry, str):
+                header = Gtk.Label(label=_(entry), xalign=0, margin_start=8, margin_top=6 if tools_box.get_first_child() else 0)
+                header.add_css_class('pdflx-menu-section')
+                tools_box.append(header)
+                continue
+            action, label, icon = entry
             button = Gtk.Button(action_name=f'win.{action}')
             button.add_css_class('flat')
             row = Gtk.Box(spacing=10)
@@ -1639,6 +1666,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             shapes_grid.attach(button, index % 2, index // 2, 1, 1)
             button.connect('clicked', lambda _button: shapes_popover.popdown())
         shapes_popover.set_child(shapes_grid)
+        self._shapes_grid, self._shapes_popover = shapes_grid, shapes_popover
         self.shapes_tool_button.set_popover(shapes_popover)
         self.tools_sidebar.append(self.shapes_tool_button)
         self.stamp_tool_button = Gtk.Button(icon_name='editor-stamp-symbolic',action_name='win.stamp',
@@ -1677,6 +1705,31 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.highlight_color_button.set_rgba(self.highlight_color_rgba)
         self.highlight_color_button.connect("color-set", self._on_highlight_color_changed)
         self.tools_sidebar.append(self.highlight_color_button)
+
+        self.note_tool_button = Gtk.Button(icon_name='editor-sticky-note-symbolic', action_name='win.sticky_note',
+                                           tooltip_text=_("tool_add_note"))
+        self.note_tool_button.add_css_class('flat')
+        _size_tool_btn(self.note_tool_button)
+
+        # Final order: pointer, edit content, annotate, fill & sign, document.
+        while child := self.tools_sidebar.get_first_child():
+            self.tools_sidebar.remove(child)
+        groups = (
+            (self.select_tool_button, self.drag_tool_button),
+            (self.add_text_tool_button, self.add_image_tool_button, self.shapes_tool_button,
+             self.pen_tool_button, self.table_tool_button, self.symbols_button),
+            (self.highlight_button, self.remove_highlight_button, self.highlight_color_button,
+             self.note_tool_button, self.stamp_tool_button),
+            (self.signature_tool_button, self.forms_tool_button),
+            (self.pages_tool_button, self.bookmarks_tool_button, self.protect_tool_button,
+             self.document_tools_button),
+        )
+        for index, group in enumerate(groups):
+            if index:
+                self.tools_sidebar.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL,
+                                                        margin_top=3, margin_bottom=3))
+            for button in group:
+                self.tools_sidebar.append(button)
 
     def _create_main_toolbar(self):
         """Create main formatting toolbar for active tools."""
@@ -1984,6 +2037,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             ('document_properties', self.on_document_properties),
             ('bookmarks', self.on_bookmarks),
             ('form_fields', self.on_form_fields),
+            ('find_replace', self.on_find_replace),
+            ('organize_pages', lambda a,p:self.organize_pages.open()),
             ('redact', lambda a,p:self.document_tools.redaction()),
             ('review', lambda a,p:self.document_tools.review()),
             ('sticky_note', lambda a,p:self.document_tools.start_note()),
@@ -2030,6 +2085,26 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_close_tab.connect('activate', self.on_close_tab)
         self.add_action(action_close_tab)
 
+        from .form_builder import style as form_style, save_style as save_form_style
+        action_guides = Gio.SimpleAction.new_stateful('alignment_guides', None,
+                                                     GLib.Variant.new_boolean(form_style()['snap']))
+        def on_guides(action, value):
+            action.set_state(value)
+            save_form_style({'snap': value.get_boolean()})
+            forms = getattr(self, 'form_tools', None)
+            if forms and forms.builder.snap.get_active() != value.get_boolean():
+                forms.builder.snap.set_active(value.get_boolean())
+        action_guides.connect('change-state', on_guides)
+        self.add_action(action_guides)
+
+        action_ai_settings = Gio.SimpleAction.new('ai_settings', None)
+        action_ai_settings.connect('activate', lambda *_: self.ai_bar.open_settings())
+        self.add_action(action_ai_settings)
+
+        action_ai = Gio.SimpleAction.new('ai_assistant', None)
+        action_ai.connect('activate', lambda *_: self.ai_bar.toggle())
+        self.add_action(action_ai)
+
         action_next_tab = Gio.SimpleAction.new('next_tab', None)
         action_next_tab.connect('activate', self.on_next_tab)
         self.add_action(action_next_tab)
@@ -2046,6 +2121,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             app.set_accels_for_action("win.next_tab", ["<Control>Page_Down", "<Control>Tab"])
             app.set_accels_for_action("win.prev_tab", ["<Control>Page_Up", "<Control><Shift>Tab", "<Control><Shift>ISO_Left_Tab"])
             app.set_accels_for_action("win.save", ["<Control>s"])
+            app.set_accels_for_action("win.ai_assistant", ["<Control>k"])
+            app.set_accels_for_action("win.find_replace", ["<Control>h"])
             app.set_accels_for_action("win.search", ["<Control>f"])
             app.set_accels_for_action("win.save_as", ["<Control><Shift>s"])
             app.set_accels_for_action("win.undo", ["<Control>z"])
@@ -2100,6 +2177,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.lookup_action("comments").set_enabled(has_pages)
         self.lookup_action("stamp").set_enabled(has_pages and in_edit)
         self.lookup_action('form_fields').set_enabled(has_pages and in_edit)
+        self.lookup_action('find_replace').set_enabled(has_pages and in_edit)
+        self.lookup_action('organize_pages').set_enabled(has_pages)
         self.forms_tool_button.set_sensitive(has_pages and in_edit)
         self.document_tools_button.set_sensitive(has_pages and in_edit)
         self.signature_tool_button.set_sensitive(has_pages and in_edit)
@@ -2159,7 +2238,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             shape_icons = {'add_rectangle': 'editor-rectangle-symbolic',
                            'add_ellipse': 'editor-ellipse-symbolic',
                            'add_checkmark': 'editor-check-symbolic', 'add_cross': 'editor-cross-symbolic'}
-            if self.tool_mode in shape_icons:
+            if self.tool_mode in shape_icons or self.tool_mode in ('add_shape', 'add_line'):
                 self.shapes_tool_button.add_css_class('active')
             else:
                 self.shapes_tool_button.remove_css_class('active')
@@ -2188,8 +2267,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         shape_selected = self.selected_shape is not None
         stroke_selected = getattr(self, 'selected_stroke', None) is not None
         text_selected = self.selected_text is not None
-        shape_controls_active = in_edit and (shape_selected or self.tool_mode in ("add_ellipse", "add_rectangle", "add_checkmark", "add_cross"))
-        stroke_controls_active = in_edit and (stroke_selected or self.tool_mode in ("pen", "highlighter"))
+        shape_controls_active = in_edit and (shape_selected or self.tool_mode in ("add_ellipse", "add_rectangle", "add_checkmark", "add_cross", "add_shape"))
+        stroke_controls_active = in_edit and (stroke_selected or self.tool_mode in ("pen", "highlighter", "add_line"))
         view_text_selected = self.view_mode and (getattr(self, 'view_sel_rect', None) is not None or getattr(self, 'selected_word', None) is not None)
         format_enabled_base = in_edit and ((text_selected or self.tool_mode == "add_text") and
                                self.selected_image is None and not shape_selected and not stroke_selected)
@@ -2251,6 +2330,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 'form_create': 'tool_create_field', 'form_reposition': 'form_redraw_bounds',
                 'add_rectangle': 'tool_rectangle', 'add_ellipse': 'tool_ellipse',
                 'add_checkmark': 'tool_checkmark', 'add_cross': 'tool_cross',
+                'add_shape': 'tool_shape', 'add_line': 'tool_line_label',
             }
             self.tool_context_label.set_text(_(tool_labels.get(self.tool_mode, 'tool_select')))
             active_controls = (self.text_format_box.get_visible() or
@@ -3019,50 +3099,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cr.move_to(ghost_x, ghost_y)
                 PangoCairo.show_layout(cr, layout)
             elif isinstance(self.dragged_object, EditableShape):
-                if not self.dragged_object.is_transparent:
-                    fill_r, fill_g, fill_b = self.dragged_object.fill_color
-                    cr.set_source_rgba(fill_r, fill_g, fill_b, 0.4)
-                    if self.dragged_object.shape_type == EditableShape.SHAPE_RECTANGLE:
-                        cr.rectangle(ghost_x, ghost_y, ghost_w, ghost_h)
-                        cr.fill()
-                    elif self.dragged_object.shape_type == EditableShape.SHAPE_ELLIPSE:
-                        if ghost_w > 0 and ghost_h > 0:
-                            cr.save()
-                            cr.translate(ghost_x + ghost_w / 2.0, ghost_y + ghost_h / 2.0)
-                            cr.scale(ghost_w / 2.0, ghost_h / 2.0)
-                            cr.arc(0, 0, 1, 0, 2 * math.pi)
-                            cr.restore()
-                            cr.fill()
-                stroke_r, stroke_g, stroke_b = self.dragged_object.stroke_color
-                cr.set_source_rgba(stroke_r, stroke_g, stroke_b, 0.6)
-                cr.set_line_width(self.dragged_object.stroke_width)
-                if self.dragged_object.shape_type == EditableShape.SHAPE_RECTANGLE:
-                    cr.rectangle(ghost_x, ghost_y, ghost_w, ghost_h)
-                    cr.stroke()
-                elif self.dragged_object.shape_type == EditableShape.SHAPE_ELLIPSE:
-                    if ghost_w > 0 and ghost_h > 0:
-                        cr.save()
-                        cr.translate(ghost_x + ghost_w / 2.0, ghost_y + ghost_h / 2.0)
-                        cr.scale(ghost_w / 2.0, ghost_h / 2.0)
-                        cr.arc(0, 0, 1, 0, 2 * math.pi)
-                        cr.restore()
-                        cr.stroke()
-                elif self.dragged_object.shape_type == EditableShape.SHAPE_CHECKMARK:
-                    pts = self.dragged_object.get_checkmark_points()
-                    cr.set_line_cap(cairo.LINE_CAP_ROUND)
-                    cr.set_line_join(cairo.LINE_JOIN_ROUND)
-                    cr.move_to(pts[0][0], pts[0][1])
-                    for pt in pts[1:]:
-                        cr.line_to(pt[0], pt[1])
-                    cr.stroke()
-                elif self.dragged_object.shape_type == EditableShape.SHAPE_CROSS:
-                    lines = self.dragged_object.get_cross_lines()
-                    cr.set_line_cap(cairo.LINE_CAP_ROUND)
-                    cr.set_line_join(cairo.LINE_JOIN_ROUND)
-                    for (p1, p2) in lines:
-                        cr.move_to(p1[0], p1[1])
-                        cr.line_to(p2[0], p2[1])
-                    cr.stroke()
+                from .shape_geometry import draw_cairo
+                draw_cairo(cr, self.dragged_object, (ghost_x, ghost_y, ghost_x + ghost_w, ghost_y + ghost_h),
+                           alpha=0.6, rotate=False)
             elif isinstance(self.dragged_object, EditableStroke):
                 r, g, b = self.dragged_object.stroke_color
                 cr.set_source_rgba(r, g, b, 0.6)
@@ -3200,64 +3239,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             
             if abs(draw_w) < 1.0 or abs(draw_h) < 1.0:
                 continue
-            
-            cr.save()
-            rot = getattr(shape, 'rotation', 0.0) % 360.0
-            if rot != 0.0:
-                cx = draw_x + draw_w / 2.0
-                cy = draw_y + draw_h / 2.0
-                cr.translate(cx, cy)
-                cr.rotate(math.radians(rot))
-                cr.translate(-cx, -cy)
-            if not shape.is_transparent:
-                fill_r, fill_g, fill_b = shape.fill_color
-                cr.set_source_rgba(fill_r, fill_g, fill_b, 1.0)
-                if shape.shape_type == EditableShape.SHAPE_RECTANGLE:
-                    cr.rectangle(draw_x, draw_y, draw_w, draw_h)
-                    cr.fill()
-                elif shape.shape_type == EditableShape.SHAPE_ELLIPSE:
-                    cr.save()
-                    cr.translate(draw_x + draw_w / 2.0, draw_y + draw_h / 2.0)
-                    cr.scale(draw_w / 2.0, draw_h / 2.0)
-                    cr.arc(0, 0, 1, 0, 2 * math.pi)
-                    cr.restore()
-                    cr.fill()
-            
-            stroke_r, stroke_g, stroke_b = shape.stroke_color
-            cr.set_source_rgba(stroke_r, stroke_g, stroke_b, 1.0)
-            cr.set_line_width(shape.stroke_width)
-            
-            if shape.shape_type == EditableShape.SHAPE_RECTANGLE:
-                cr.rectangle(draw_x, draw_y, draw_w, draw_h)
-                cr.stroke()
-            elif shape.shape_type == EditableShape.SHAPE_ELLIPSE:
-                cr.save()
-                cr.translate(draw_x + draw_w / 2.0, draw_y + draw_h / 2.0)
-                cr.scale(draw_w / 2.0, draw_h / 2.0)
-                cr.arc(0, 0, 1, 0, 2 * math.pi)
-                cr.restore()
-                cr.stroke()
-            elif shape.shape_type == EditableShape.SHAPE_CHECKMARK:
-                pts = shape.get_checkmark_points()
-                cr.set_line_cap(cairo.LINE_CAP_ROUND)
-                cr.set_line_join(cairo.LINE_JOIN_ROUND)
-                cr.move_to(pts[0][0], pts[0][1])
-                for pt in pts[1:]:
-                    cr.line_to(pt[0], pt[1])
-                cr.stroke()
-            elif shape.shape_type == EditableShape.SHAPE_CROSS:
-                lines = shape.get_cross_lines()
-                cr.set_line_cap(cairo.LINE_CAP_ROUND)
-                cr.set_line_join(cairo.LINE_JOIN_ROUND)
-                for (p1, p2) in lines:
-                    cr.move_to(p1[0], p1[1])
-                    cr.line_to(p2[0], p2[1])
-                cr.stroke()
-            cr.restore()
+            from .shape_geometry import draw_cairo
+            draw_cairo(cr, shape)
 
-        
         if hasattr(self,"form_tools"):
             self.form_tools.draw_fields(cr)
+        if getattr(self,'_object_guides',None) and self.dragged_object is not None:
+            from .form_builder import draw_guides
+            draw_guides(cr,self._object_guides,self.doc[self.current_page_index].rect,self.zoom_level)
         if hasattr(self,'measure_tool'):
             self.measure_tool.draw(cr)
         if getattr(self,'node_tool',None):
@@ -3266,42 +3255,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         placement=getattr(self,'_certificate_placement',None)
         if placement:placement.draw(cr)
         if self.temp_shape:
-            x1, y1, x2, y2 = self.temp_shape.bbox
-            draw_x = x1
-            draw_y = y1
-            draw_w = x2 - x1
-            draw_h = y2 - y1
-            
-            stroke_r, stroke_g, stroke_b = self.temp_shape.stroke_color
-            cr.set_source_rgba(stroke_r, stroke_g, stroke_b, 0.7)  
-            cr.set_line_width(self.temp_shape.stroke_width)
-            
-            if self.temp_shape.shape_type == EditableShape.SHAPE_RECTANGLE:
-                cr.rectangle(draw_x, draw_y, draw_w, draw_h)
-                cr.stroke()
-            elif self.temp_shape.shape_type == EditableShape.SHAPE_ELLIPSE:
-                cr.save()
-                cr.translate(draw_x + draw_w / 2.0, draw_y + draw_h / 2.0)
-                cr.scale(draw_w / 2.0, draw_h / 2.0)
-                cr.arc(0, 0, 1, 0, 2 * math.pi)
-                cr.restore()
-                cr.stroke()
-            elif self.temp_shape.shape_type == EditableShape.SHAPE_CHECKMARK:
-                pts = self.temp_shape.get_checkmark_points()
-                cr.set_line_cap(cairo.LINE_CAP_ROUND)
-                cr.set_line_join(cairo.LINE_JOIN_ROUND)
-                cr.move_to(pts[0][0], pts[0][1])
-                for pt in pts[1:]:
-                    cr.line_to(pt[0], pt[1])
-                cr.stroke()
-            elif self.temp_shape.shape_type == EditableShape.SHAPE_CROSS:
-                lines = self.temp_shape.get_cross_lines()
-                cr.set_line_cap(cairo.LINE_CAP_ROUND)
-                cr.set_line_join(cairo.LINE_JOIN_ROUND)
-                for (p1, p2) in lines:
-                    cr.move_to(p1[0], p1[1])
-                    cr.line_to(p2[0], p2[1])
-                cr.stroke()
+            from .shape_geometry import draw_cairo
+            draw_cairo(cr, self.temp_shape, alpha=0.7)
 
         if self.temp_image_bbox:
             x1, y1, x2, y2 = self.temp_image_bbox
@@ -3403,6 +3358,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 for pt in self.temp_stroke.points[1:]:
                     cr.line_to(pt[0], pt[1])
                 cr.stroke()
+                from .shape_geometry import stroke_ends
+                _points, heads = stroke_ends(self.temp_stroke.points, self.temp_stroke.stroke_width,
+                                             getattr(self.temp_stroke, 'arrow_start', False),
+                                             getattr(self.temp_stroke, 'arrow_end', False))
+                for head in heads:
+                    cr.move_to(*head[0])
+                    for point in head[1:]:
+                        cr.line_to(*point)
+                    cr.close_path()
+                    cr.fill()
             cr.restore()
 
         selected_obj = getattr(self, 'selected_table', None) or self.selected_text or self.selected_image or self.selected_shape or self.selected_stroke
@@ -4115,6 +4080,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.shape_fill_button.handler_unblock_by_func(self.on_shape_format_changed)
             self.shape_stroke_button.handler_unblock_by_func(self.on_shape_format_changed)
             self.shape_stroke_width_spin.handler_unblock_by_func(self.on_shape_format_changed)
+        if hasattr(self, 'shape_tools'):
+            self.shape_tools.sync_shape(shape_obj)
 
     def _update_stroke_format_controls(self, stroke_obj):
         """Update stroke format controls."""
@@ -4140,6 +4107,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         finally:
             self.stroke_color_button.handler_unblock_by_func(self.on_stroke_format_changed)
             self.stroke_width_spin.handler_unblock_by_func(self.on_stroke_format_changed)
+        if hasattr(self, 'shape_tools'):
+            self.shape_tools.sync_line(stroke_obj)
 
     def _update_rotation_controls(self, selected_obj):
         """Sync rotation spin button and reset button with selected object's rotation angle."""
@@ -4799,9 +4768,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         except Exception as error:
             show_error_dialog(self, str(error), _("signature_digital"))
 
+    def on_find_replace(self, action=None, param=None):
+        if not self.doc or not self.document_tools.editable():
+            return
+        from .find_replace import FindReplaceDialog
+        initial = self.search_entry.get_text() if self.search_revealer.get_reveal_child() else ''
+        FindReplaceDialog(self, initial).present(self)
+
     def on_form_fields(self, action=None, param=None):
+        """Open the forms sidebar; on a page without fields, Add fields is ready for building."""
         if self.doc and self.form_tools.editable():
             self.form_tools.show()
+            from .document_features import list_form_fields
+            if not list_form_fields(self.doc, [self.current_page_index]):
+                self.form_tools.builder.open()
 
     def _document_export_filter(self, extension, mime):
         file_filter = Gtk.FileFilter(name=f"{extension.upper()} (*.{extension})")
@@ -5057,7 +5037,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
         elif self.tool_mode == "select":
             self.pdf_view.set_cursor(None)
-        elif self.tool_mode in ("add_text", "add_ellipse", "add_rectangle", "add_checkmark", "add_cross", "pen", "highlighter"):
+        elif self.tool_mode in ("add_text", "add_ellipse", "add_rectangle", "add_checkmark", "add_cross", "pen", "highlighter",
+                                "add_shape", "add_line"):
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
         elif self.tool_mode in ("add_image", "signature"):
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("cell"))
@@ -5117,9 +5098,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if not getattr(self, 'inline_editor_widget', None) or not getattr(self, 'inline_editor_text_obj', None):
             return
         text_obj = self.inline_editor_text_obj
+        font_px = max(1, text_obj.font_size * self.zoom_level)
+        font = Pango.FontDescription.from_string(text_obj.font_family_base or "Sans")
+        font.set_absolute_size(int(font_px * Pango.SCALE))
+        if text_obj.is_bold:
+            font.set_weight(Pango.Weight.BOLD)
+        if text_obj.is_italic:
+            font.set_style(Pango.Style.ITALIC)
         if self._inline_editor_font_zoom != self.zoom_level:
-            family = (text_obj.font_family_base or "Sans").replace("\\", "\\\\").replace('"', '\\"')
-            font_px = max(1, text_obj.font_size * self.zoom_level)
+            # Use the family Pango parsed (e.g. "Times Roman" -> "Times") so the
+            # TextView renders with the same font the layout below measures.
+            family = (font.get_family() or "Sans").replace("\\", "\\\\").replace('"', '\\"')
             red, green, blue = (round(max(0, min(1, part)) * 255) for part in text_obj.color)
             self._inline_editor_font_provider.load_from_data(
                 f'textview.inline-editor-tv {{ font-family: "{family}"; '
@@ -5150,7 +5139,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             anchor_bottom = anchor_top + text_obj.font_size * self.zoom_level
             source_width = 0
 
-        font_px = max(1, text_obj.font_size * self.zoom_level)
         buffer = self.inline_editor_tv.get_buffer()
         content = buffer.get_text(buffer.get_start_iter(), buffer.get_end_iter(), True)
         ed_x = int(anchor_x)
@@ -5159,12 +5147,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                                 page_offset_x + self.current_pdf_page_width - ed_x - 4))
         surface = cairo.ImageSurface(cairo.FORMAT_ARGB32, 1, 1)
         layout = PangoCairo.create_layout(cairo.Context(surface))
-        font = Pango.FontDescription.from_string(text_obj.font_family_base or "Sans")
-        font.set_absolute_size(int(font_px * Pango.SCALE))
-        if text_obj.is_bold:
-            font.set_weight(Pango.Weight.BOLD)
-        if text_obj.is_italic:
-            font.set_style(Pango.Style.ITALIC)
         layout.set_font_description(font)
         layout.set_text(content or " ", -1)
         natural_width, _ = layout.get_pixel_size()
@@ -5172,7 +5154,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         layout.set_width(max(1, ed_w - 4) * Pango.SCALE)
         layout.set_wrap(Pango.WrapMode.WORD_CHAR)
         _, text_height = layout.get_pixel_size()
-        ed_h = int(max(anchor_bottom - anchor_top, text_height + 2, font_px * 1.2))
+        page = self.doc[self.current_page_index]
+        baseline = getattr(text_obj, 'baseline', None)
+        if baseline is not None and not page.rotation and not getattr(text_obj, 'rotation', 0):
+            # Put the editor's first baseline on the PDF baseline; the bbox top
+            # sits higher than the TextView's ascent and made the text jump.
+            ed_y = int(round(page_offset_y + baseline * self.zoom_level
+                             - layout.get_baseline() / Pango.SCALE))
+        ed_h = int(max(anchor_bottom - ed_y, text_height + 2, font_px * 1.2))
         self.inline_editor_widget.set_margin_start(ed_x)
         self.inline_editor_widget.set_margin_top(ed_y)
         self.inline_editor_widget.set_size_request(ed_w, ed_h)
@@ -5695,7 +5684,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             field=form_field_at_point(self.doc,self.current_page_index,point)
             if field:
                 self._apply_and_hide_editor()
-                self.form_tools.click_field(field)
+                state=gesture.get_current_event_state() if gesture and hasattr(gesture,'get_current_event_state') else 0
+                extend=bool(state & (Gdk.ModifierType.SHIFT_MASK|Gdk.ModifierType.CONTROL_MASK))
+                self.form_tools.click_field(field,extend=extend)
                 return
         if interaction:interaction.selected=None
 
@@ -6425,6 +6416,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self._set_zoom(1.0, focal_point=getattr(self, '_last_pointer_pos', None))
             return True
 
+        elif ctrl and keyval in (Gdk.KEY_bracketright, Gdk.KEY_bracketleft) and not self.view_mode:
+            target = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
+            if target and self.inline_editor_widget is None:
+                from .layering import restack
+                self.commit_pending_format_change()
+                restack(self, target, keyval == Gdk.KEY_bracketright)
+                return True
         elif keyval == Gdk.KEY_Delete:
             self.commit_pending_format_change()
             obj_to_delete = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
@@ -6557,8 +6555,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.tool_mode = tool_name
         logger.debug(_("dbg_tool_changed", self.tool_mode))
         self._update_ui_state()
-        if self.tool_mode in ("pen", "highlighter"):
+        if self.tool_mode in ("pen", "highlighter", "add_line"):
             self._update_stroke_format_controls(None)
+        if self.tool_mode in ("add_shape", "add_rectangle") and hasattr(self, 'shape_tools'):
+            self.shape_tools.sync_shape(None)
+        if hasattr(self, 'form_tools'):
+            self.form_tools.builder.sync_tool()
 
     def on_drag_begin(self, gesture, start_x, start_y):
         """Initiate canvas drag gesture for selection, movement, resizing, or freehand drawing."""
@@ -6708,6 +6710,20 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 page_number=self.current_page_index,
                 is_new=True
             )
+            self.pdf_view.queue_draw()
+            return
+        elif self.tool_mode == "add_shape":
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self.dragging_to_create = True
+            self.drag_start_page_pos = (unrot_px, unrot_py)
+            self.temp_shape = self.shape_tools.new_shape((unrot_px, unrot_py, unrot_px, unrot_py))
+            return
+        elif self.tool_mode == "add_line":
+            self.selected_stroke = self.selected_text = self.selected_image = self.selected_shape = None
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self.dragging_to_create = True
+            self.drag_start_page_pos = (unrot_px, unrot_py)
+            self.temp_stroke = self.shape_tools.new_line(unrot_px, unrot_py)
             self.pdf_view.queue_draw()
             return
         elif self.tool_mode == "add_ellipse":
@@ -6866,6 +6882,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 start_x, start_y = self.drag_start_page_pos
                 current_x = start_x + delta_x
                 current_y = start_y + delta_y
+                if getattr(self.temp_stroke, 'tool_type', None) == 'line':
+                    state = gesture.get_current_event_state() if hasattr(gesture, 'get_current_event_state') else 0
+                    end = self.shape_tools.line_end((start_x, start_y), (current_x, current_y),
+                                                    bool(state & Gdk.ModifierType.SHIFT_MASK))
+                    self.temp_stroke.points = [(start_x, start_y), end]
+                    self.temp_stroke.recalculate_bbox()
+                    self.pdf_view.queue_draw()
+                    return
                 self.temp_stroke.add_point(current_x, current_y)
                 self.pdf_view.queue_draw()
                 return
@@ -6936,6 +6960,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         start_bbox = self.drag_begin_state['bbox']
         w = start_bbox[2] - start_bbox[0]
         h = start_bbox[3] - start_bbox[1]
+        snapped = self._snap_object_rect(fitz.Rect(new_x, new_y, new_x + w, new_y + h), move=True)
+        delta_x += snapped.x0 - new_x
+        delta_y += snapped.y0 - new_y
+        new_x, new_y = snapped.x0, snapped.y0
         
         self.dragged_object.x = new_x
         self.dragged_object.y = new_y
@@ -7017,6 +7045,27 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.pdf_view.queue_draw()
 
+    def _snap_object_rect(self, rect, move=False, edges=()):
+        """Line a dragged object up with other objects, form fields and the page centre."""
+        self._object_guides = []
+        from .form_builder import style, snap_rect
+        if not self.doc or not style()['snap']:
+            return rect
+        page = self.doc[self.current_page_index]
+        dragged = self.dragged_object
+        if page.rotation or getattr(dragged, 'rotation', 0):
+            return rect
+        table_id = getattr(dragged, 'table_id', None)
+        others = [obj.bbox for obj in (*self.editable_texts, *self.editable_shapes, *self.editable_images,
+                                        *self.editable_strokes)
+                  if obj is not dragged and obj.page_number == self.current_page_index
+                  and not (table_id and getattr(obj, 'table_id', None) == table_id)]
+        from .document_features import list_form_fields
+        others += [field['rect'] for field in list_form_fields(self.doc, [self.current_page_index])]
+        snapped, self._object_guides = snap_rect(rect, others, 5 / self.zoom_level, edges=edges, move=move,
+                                                 page=page.rect)
+        return snapped
+
     def _handle_resize_update(self, offset_x, offset_y):
         """Handle resize update."""
         if not self.resize_handle or not self.resize_start_bbox or not self.dragged_object:
@@ -7063,6 +7112,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if "s" in self.resize_handle:  # Bottom handles
             new_y2 = y2 + delta_y
 
+        edges = [edge for letter, edge in (('w', 'x0'), ('e', 'x1'), ('n', 'y0'), ('s', 'y1'))
+                 if letter in self.resize_handle]
+        snapped = self._snap_object_rect(fitz.Rect(new_x1, new_y1, new_x2, new_y2), edges=edges)
+        new_x1, new_y1, new_x2, new_y2 = snapped.x0, snapped.y0, snapped.x1, snapped.y1
         min_size = 10
         if new_x2 - new_x1 < min_size:
             if "e" in self.resize_handle:
@@ -7134,6 +7187,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if getattr(self, 'temp_stroke', None) is not None:
                 stroke_to_add = self.temp_stroke
                 self.temp_stroke = None
+                if getattr(stroke_to_add, 'tool_type', None) == 'line':
+                    (ax, ay), (bx, by) = stroke_to_add.points[0], stroke_to_add.points[-1]
+                    if math.hypot(bx - ax, by - ay) < 3:
+                        stroke_to_add.points = []
                 if stroke_to_add.points:
                     stroke_to_add.recalculate_bbox()
                     stroke_to_add.original_bbox = stroke_to_add.bbox
@@ -7165,6 +7222,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         self.pdf_view.queue_draw()
                         return
                 
+                self.shape_tools.apply_defaults(self.temp_shape)
                 self.temp_shape.original_bbox = self.temp_shape.bbox
                 self.selected_shape = self.temp_shape
                 self.selected_text = None

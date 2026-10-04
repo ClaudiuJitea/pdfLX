@@ -1534,54 +1534,39 @@ def _apply_single_object_to_page(doc, page, obj):
         from .image_editing import insert_image
         insert_image(doc, page, obj)
     elif isinstance(obj, EditableShape):
+        from . import shape_geometry
         rect = fitz.Rect(obj.bbox)
-        shape = page.new_shape()
-        stroke = tuple(float(c) for c in obj.stroke_color)
-        fill = tuple(float(c) for c in obj.fill_color) if not obj.is_transparent else None
         cx = (rect.x0 + rect.x1) / 2.0
         cy = (rect.y0 + rect.y1) / 2.0
         mat = get_rotation_matrix(cx, cy, rot) if rot != 0.0 else None
-
-        if obj.shape_type == EditableShape.SHAPE_RECTANGLE:
-            if mat:
-                shape.draw_quad(rect.quad * mat)
-            else:
-                shape.draw_rect(rect)
-            shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
-        elif obj.shape_type == EditableShape.SHAPE_ELLIPSE:
-            if mat:
-                k = 0.5522847498307935
-                rx = (rect.x1 - rect.x0) / 2.0
-                ry = (rect.y1 - rect.y0) / 2.0
-                beziers = [
-                    (fitz.Point(cx + rx, cy), fitz.Point(cx + rx, cy - k * ry), fitz.Point(cx + k * rx, cy - ry), fitz.Point(cx, cy - ry)),
-                    (fitz.Point(cx, cy - ry), fitz.Point(cx - k * rx, cy - ry), fitz.Point(cx - rx, cy - k * ry), fitz.Point(cx - rx, cy)),
-                    (fitz.Point(cx - rx, cy), fitz.Point(cx - rx, cy + k * ry), fitz.Point(cx - k * rx, cy + ry), fitz.Point(cx, cy + ry)),
-                    (fitz.Point(cx, cy + ry), fitz.Point(cx + k * rx, cy + ry), fitz.Point(cx + rx, cy + k * ry), fitz.Point(cx + rx, cy))
-                ]
-                for p0, c1, c2, p1 in beziers:
-                    shape.draw_bezier(p0 * mat, c1 * mat, c2 * mat, p1 * mat)
-            else:
-                shape.draw_oval(rect)
-            shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
-        elif obj.shape_type == EditableShape.SHAPE_CHECKMARK:
-            pts = obj.get_checkmark_points()
-            fitz_pts = [fitz.Point(p[0], p[1]) * mat if mat else fitz.Point(p[0], p[1]) for p in pts]
-            shape.draw_polyline(fitz_pts)
-            shape.finish(color=stroke, fill=None, width=obj.stroke_width, lineCap=1, lineJoin=1, closePath=False)
-        elif obj.shape_type == EditableShape.SHAPE_CROSS:
-            lines = obj.get_cross_lines()
-            for (p1, p2) in lines:
-                pt1 = fitz.Point(p1[0], p1[1]) * mat if mat else fitz.Point(p1[0], p1[1])
-                pt2 = fitz.Point(p2[0], p2[1]) * mat if mat else fitz.Point(p2[0], p2[1])
-                shape.draw_line(pt1, pt2)
-            shape.finish(color=stroke, fill=None, width=obj.stroke_width, lineCap=1, lineJoin=1, closePath=False)
-        else:
-            if mat:
-                shape.draw_quad(rect.quad * mat)
-            else:
-                shape.draw_rect(rect)
-            shape.finish(color=stroke, fill=fill, width=obj.stroke_width)
+        paths = shape_geometry.outline(obj)
+        if mat:
+            paths = shape_geometry.transform(paths, lambda p: tuple(fitz.Point(p) * mat))
+        stroke = tuple(float(c) for c in obj.stroke_color) if obj.stroke_width > 0 else None
+        fill = tuple(float(c) for c in obj.fill_color) if not obj.is_transparent else None
+        closed = obj.shape_type not in shape_geometry.OPEN_KINDS
+        if stroke is None and (fill is None or not closed):
+            return True, None
+        opacity = max(0.0, min(1.0, float(getattr(obj, 'opacity', 1.0))))
+        style = getattr(obj, 'dash', 'solid')
+        pattern = shape_geometry.dash_pattern(style, obj.stroke_width)
+        round_ends = style == 'dotted' or not closed
+        shape = page.new_shape()
+        for subpath_closed, segments in paths:
+            last = None
+            for segment in segments:
+                if segment[0] == 'M':
+                    last = fitz.Point(segment[1])
+                elif segment[0] == 'L':
+                    shape.draw_line(last, segment[1])
+                    last = fitz.Point(segment[1])
+                else:
+                    shape.draw_bezier(last, segment[1], segment[2], segment[3])
+                    last = fitz.Point(segment[3])
+        shape.finish(color=stroke, fill=fill if closed else None, width=obj.stroke_width,
+                     dashes=f'[{pattern[0]:g} {pattern[1]:g}] 0' if pattern and stroke else None,
+                     lineCap=1 if round_ends else 0, lineJoin=1 if not closed else 0,
+                     closePath=closed, fill_opacity=opacity, stroke_opacity=opacity)
         shape.commit()
     elif isinstance(obj, EditableStroke):
         if obj.points and len(obj.points) >= 2:
@@ -1592,19 +1577,34 @@ def _apply_single_object_to_page(doc, page, obj):
                 cy = (obj.bbox[1] + obj.bbox[3]) / 2.0
                 mat = get_rotation_matrix(cx, cy, rot)
                 pts = [p * mat for p in pts]
+            heads = []
+            if getattr(obj, 'arrow_start', False) or getattr(obj, 'arrow_end', False):
+                from . import shape_geometry
+                trimmed, heads = shape_geometry.stroke_ends([(p.x, p.y) for p in pts], obj.stroke_width,
+                                                            getattr(obj, 'arrow_start', False), getattr(obj, 'arrow_end', False))
+                pts = [fitz.Point(p) for p in trimmed]
             shape.draw_polyline(pts)
             stroke = tuple(float(c) for c in obj.stroke_color)
-            is_hl = getattr(obj, 'tool_type', None) in (EditableStroke.TOOL_HIGHLIGHTER, "highlighter") or obj.stroke_width >= 8.0
+            is_line = getattr(obj, 'tool_type', None) == 'line'
+            is_hl = getattr(obj, 'tool_type', None) in (EditableStroke.TOOL_HIGHLIGHTER, "highlighter") or (
+                obj.stroke_width >= 8.0 and not is_line)
             cap = 2 if is_hl else 1
             join = 2 if is_hl else 1
+            from . import shape_geometry
+            pattern = shape_geometry.dash_pattern(getattr(obj, 'dash', 'solid'), obj.stroke_width)
             shape.finish(
                 color=stroke,
                 width=obj.stroke_width,
                 stroke_opacity=getattr(obj, 'opacity', 1.0),
                 lineCap=cap,
                 lineJoin=join,
+                dashes=f'[{pattern[0]:g} {pattern[1]:g}] 0' if pattern else None,
                 closePath=False
             )
+            for head in heads:
+                shape.draw_polyline([fitz.Point(p) for p in head])
+                shape.finish(color=stroke, fill=stroke, width=0.5, stroke_opacity=getattr(obj, 'opacity', 1.0),
+                             fill_opacity=getattr(obj, 'opacity', 1.0), closePath=True, lineJoin=1)
             shape.commit()
         elif obj.points and len(obj.points) == 1:
             p = fitz.Point(obj.points[0][0], obj.points[0][1])
@@ -1641,10 +1641,9 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
         if not restore_page_from_snapshot(doc, page_num):
             raise ValueError("The original page snapshot is unavailable.")
         page = doc.load_page(page_num)
-        table_cells = [obj for obj in all_shapes if getattr(obj, 'table_id', None)]
-        other_shapes = [obj for obj in all_shapes if not getattr(obj, 'table_id', None)]
-        # Table backgrounds must be below their text; ordinary canvas layering stays intact.
-        for obj in table_cells + list(all_texts) + list(all_images) + other_shapes + list(all_strokes or []):
+        from .layering import draw_order
+        # Table backgrounds sit below their text; explicit z (Bring to Front / Send to Back) wins.
+        for obj in draw_order(list(all_texts) + list(all_images) + list(all_shapes) + list(all_strokes or [])):
             if obj.page_number == page_num and obj is not exclude_obj:
                 if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
                     success, error = _apply_single_object_to_page(doc, page, obj)

@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">
+  <!-- Filled outlines preserve shape during GTK symbolic recoloring. -->
+  <path fill="#2e3436" fill-rule="nonzero" d="M8.624,2.390 L6.390,21.376 L8.376,21.610 L10.610,2.624 Z"/><path fill="#2e3436" fill-rule="nonzero" d="M15.624,2.390 L13.390,21.376 L15.376,21.610 L17.610,2.624 Z"/><path fill="#2e3436" fill-rule="nonzero" d="M3.000,10.000 L21.500,10.000 L21.500,8.000 L3.000,8.000 Z"/><path fill="#2e3436" fill-rule="nonzero" d="M2.500,16.000 L21.000,16.000 L21.000,14.000 L2.500,14.000 Z"/>
+</svg>

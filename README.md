@@ -29,7 +29,9 @@ and print or export — all locally, with no cloud services.
   dialog design throughout the app.
 - **Real PDF editing.** Change existing text and images, not just draw on top of the page.
 - **Private by design.** Everything — including Word export, OCR, and signing — runs on
-  your machine.
+  your machine. Only two optional features send data, and only when you use them: the AI
+  assistant (to OpenRouter and the model you choose) and form submit buttons (to the
+  form's address, after you confirm).
 - **Non-destructive and undoable.** Every edit, from form values to page changes, supports
   undo and redo across pages.
 
@@ -37,11 +39,12 @@ and print or export — all locally, with no cloud services.
 
 | Area | What you can do |
 |---|---|
-| **Edit content** | Edit existing text with fonts, sizes, colours, and alignment; add text boxes; move, resize, tilt, crop, and style images; draw shapes and freehand strokes. |
-| **Organise pages** | Insert, extract, split, reorder, rotate, crop, resize, N-up and booklet layouts, headers/footers, Bates numbering, and page labels. |
-| **Review** | Sticky notes, highlights, underline/strikeout, callouts and shapes, replies and review states, comment summaries, and redaction with preview. |
+| **Edit content** | Edit existing text with fonts, sizes, colours, and alignment; add text boxes; move, resize, tilt, crop, and style images; draw shapes, lines, and arrows with alignment guides and stacking order; find and replace text. |
+| **AI assistant** | Ask in plain language to edit one or many elements, add pages, build forms, or recreate a page from a picture, using the OpenRouter model you choose. |
+| **Organise pages** | A drag-and-drop page grid; insert, extract, split, reorder, rotate, crop, resize, N-up and booklet layouts, headers/footers, Bates numbering, and page labels. |
+| **Review** | Sticky notes, highlights, underline/strikeout, callouts and shapes, replies and review states, comment summaries, and redaction with preview, including emails, IBANs, card and phone numbers. |
 | **Stamps** | A stamp designer with 14 templates, custom colours and shapes, date/author fields, and saved templates. |
-| **Forms** | Create text fields, checkboxes, dropdowns, lists, radio groups, and buttons; fill on the page; calculations and formatting; import/export form data. |
+| **Forms** | Build forms fast with quick fields, labels, a shared style, guides, copies, tab order, and field detection; align fields; field scripts, calculations, and formatting; submit buttons; import/export form data. |
 | **Signatures** | Draw or import a handwritten signature, sign with a `.p12`/`.pfx` certificate, and verify existing signatures. |
 | **Protect** | Passwords and permissions, sanitisation, hidden-text scan, and append-only saving that keeps signatures valid. |
 | **Print & export** | A print dialog with live sheet preview; export to Word (DOCX), text, Markdown, HTML, images, and SVG. |
@@ -75,13 +78,25 @@ Download `pdflx_<version>_all.deb` from the
 [latest release](https://github.com/ClaudiuJitea/pdfLX/releases/latest) and install it:
 
 ```sh
-sudo apt install ./pdflx_0.3_all.deb
+sudo apt install ./pdflx_0.4_all.deb
 ```
 
 This installs the **pdfLX** launcher and the `pdflx-cli` command. Requirements: Ubuntu
 24.04+ or Debian 13+ (GTK 4 and libadwaita 1.5 or newer). APT installs the system
 dependencies; the installer downloads the Python libraries (PyMuPDF, pdf2docx, pyHanko)
 into `/opt/pdflx/.venv`, so internet access is needed during installation.
+
+### AppImage (any Linux distribution)
+
+Download `pdflx-x86_64.AppImage` (or `pdflx-aarch64.AppImage` for ARM) from the
+[latest release](https://github.com/ClaudiuJitea/pdfLX/releases/latest), then:
+
+```sh
+chmod +x pdflx-x86_64.AppImage
+./pdflx-x86_64.AppImage
+```
+
+Everything is bundled, so nothing else needs to be installed.
 
 ### From source
 
@@ -127,6 +142,9 @@ pdflx-cli --help
 | `Ctrl+S` | Save |
 | `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo |
 | `Ctrl+P` | Print |
+| `Ctrl+K` | AI assistant |
+| `Ctrl+H` | Find and replace |
+| `Ctrl+]` / `Ctrl+[` | Bring to front / send to back |
 | `S` / `M` | Select tool / pan tool |
 | `H` | Highlight the selection |
 | `Ctrl+D` | Duplicate the selected form field |
@@ -139,7 +157,7 @@ pdflx-cli --help
 ```sh
 ./build-deb.sh            # dist/pdflx_<version>_all.deb
 ./build-deb.sh --offline  # bundles Python wheels for offline installs on matching systems
-./build-appimage.sh       # AppImage and portable packages
+./build-appimage.sh       # pdflx-<arch>.AppImage
 ```
 
 `org.pdflx.Editor.json` is the Flatpak manifest, and `debian/` contains the Debian

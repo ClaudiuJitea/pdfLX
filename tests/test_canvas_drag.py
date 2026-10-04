@@ -67,6 +67,8 @@ if PdfEditorWindow:
         '_update_table_drag', '_clear_table_preview', '_is_table_preview_member', '_cancel_table_drag',
     ):
         setattr(CanvasHarness, method, getattr(PdfEditorWindow, method))
+    # Drag tests check exact positions; alignment guides are covered by ui_pro_features_smoke.
+    CanvasHarness._snap_object_rect = lambda self, rect, move=False, edges=(): rect
 
 
 @unittest.skipUnless(PdfEditorWindow, 'GTK bindings are required')

@@ -48,31 +48,29 @@ jobs:
             python3-gi-cairo \
             gir1.2-gtk-4.0 \
             gir1.2-adw-1 \
-            debhelper \
-            rsync \
-            zip \
-            p7zip-full
+            dpkg-dev
 
-      - name: Run build script
+      - name: Build AppImage
         run: |
           chmod +x build-appimage.sh
           ./build-appimage.sh
+
+      # The .deb is architecture-independent (dependencies install at setup time), so one is enough.
+      - name: Build Debian package
+        if: matrix.arch == 'x86_64'
+        run: |
+          chmod +x build-deb.sh
+          ./build-deb.sh
+          mv dist/*.deb .
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
           name: release-artifacts-${{ matrix.arch }}
           path: |
-            *.AppImage
-            *.tar.gz
-            *.tar.xz
-            *.zip
-            *.7z
-            *.deb
-            *.dsc
-            *.buildinfo
-            *.changes
-          if-no-files-found: warn
+            pdflx-*.AppImage
+            pdflx_*.deb
+          if-no-files-found: error
 
   release:
     name: Publish GitHub Release
@@ -86,23 +84,23 @@ jobs:
           path: release-assets
           merge-multiple: true
 
-      - name: Inspect release assets
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Release notes from CHANGELOG.md
         run: |
-          echo "=== Collected Release Assets ==="
-          ls -lh release-assets/
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '$0 ~ "^## "v" " {found=1; next} found && /^## / {exit} found' CHANGELOG.md > release-notes.md
+          echo "=== Release notes ===" && cat release-notes.md
+          echo "=== Release assets ===" && ls -lh release-assets/
 
       - name: Create release and upload assets
         uses: softprops/action-gh-release@v2
         with:
+          name: pdfLX ${{ github.ref_name }}
+          body_path: release-notes.md
           files: |
             release-assets/*.AppImage
-            release-assets/*.tar.gz
-            release-assets/*.tar.xz
-            release-assets/*.zip
-            release-assets/*.7z
             release-assets/*.deb
-            release-assets/*.dsc
-            release-assets/*.buildinfo
-            release-assets/*.changes
           draft: false
           prerelease: false

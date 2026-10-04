@@ -549,9 +549,23 @@ class DocumentToolsController:
             return
         selection=self.selection()
         source=self.window.doc
+        review=[]
         def targets():
-            return tools.redaction_targets(source,first.get_value_as_int()-1,last.get_value_as_int()-1,
-                                            query.get_text(),selection,regex.get_active(),case.get_active())
+            from .ops import redact_patterns
+            start,end=first.get_value_as_int()-1,last.get_value_as_int()-1
+            items=[]
+            if query.get_text().strip() or selection is not None:
+                try:
+                    items=tools.redaction_targets(source,start,end,query.get_text(),selection,
+                                                  regex.get_active(),case.get_active())
+                except ValueError:
+                    items=[]
+            keys={key for key,check in patterns.items() if check.get_active()}
+            found,review[:]=redact_patterns.targets(source,start,end,keys) if keys else ([],[])
+            items=items+found
+            if not items:
+                raise ValueError(_("redact_nothing_found"))
+            return items
         def options():
             rgba=fill_color.get_rgba()
             return dict(fill=None if transparent.get_active() else (rgba.red,rgba.green,rgba.blue),
@@ -565,7 +579,13 @@ class DocumentToolsController:
                 scratch[number].add_redact_annot(rect,text=settings['replacement'] or None,
                     fill=settings['fill'] if settings['fill'] is not None else False,
                     text_color=settings['text_color'],cross_out=True)
-            dialog.message.set_text(_("tool_redaction_count",len(items)))
+            summary=_("tool_redaction_count",len(items))
+            if review:
+                names={key:_(f'redact_pattern_{key}') for key in patterns}
+                lines=[f'p.{number+1} · {names[key]}: {text}' for number,key,text in review[:8]]
+                more=_("redact_review_more",len(review)-8) if len(review)>8 else ''
+                summary+='\n'+'\n'.join(lines)+('\n'+more if more else '')
+            dialog.message.set_text(summary)
             return items[0][0]
         def apply():
             items=targets()
@@ -580,6 +600,9 @@ class DocumentToolsController:
         query=dialog.entry(_("tool_redact_search"))
         regex=dialog.check(_("search_regex"),False)
         case=dialog.check(_("search_case"),False)
+        dialog.section(_("redact_section_patterns"))
+        from .ops.redact_patterns import ORDER
+        patterns={key:dialog.check(_(f'redact_pattern_{key}'),False) for key in ORDER}
         dialog.section(_("props_appearance"))
         replacement=dialog.entry(_("redact_replacement"),'')
         replacement.set_placeholder_text('[REDACTED]')

@@ -1,4 +1,5 @@
 """Page-based form creation, filling, and field management."""
+import re
 import pymupdf as fitz
 from gi.repository import Gtk, Pango
 from . import document_tools as tools, document_features as features
@@ -16,38 +17,55 @@ class FormController:
         self.inline_editor=None
         from .form_interaction import FormInteraction
         self.interaction=FormInteraction(self)
+        from .form_arrange import ArrangeBar
+        self.arrange_bar=ArrangeBar(self,window.document_surface)
         self.sidebar=Gtk.Revealer(hexpand=False,reveal_child=False,
                                   transition_type=Gtk.RevealerTransitionType.SLIDE_LEFT)
-        box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=10,
-                    margin_start=12,margin_end=12,margin_top=12,margin_bottom=12)
-        # Margins add another 24px. Keep labels' natural width below this
-        # content width so the sidebar does not take space from the page.
-        box.set_size_request(296,-1)
-        header=Gtk.Box(spacing=8)
-        title=Gtk.Label(label=_("menu_form_fields"),xalign=0,hexpand=True)
-        title.add_css_class('heading')
+        box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        # Keep labels' natural width below the content width so the sidebar
+        # does not take space from the page.
+        box.set_size_request(320,-1)
+        box.add_css_class('pdflx-form-sidebar')
+        header=Gtk.Box(spacing=8,margin_start=16,margin_end=8,margin_top=10,margin_bottom=6)
+        title=Gtk.Label(label=_("menu_form_fields").rstrip('…'),xalign=0,hexpand=True)
+        title.add_css_class('title-4')
         header.append(title)
         close=Gtk.Button(icon_name='window-close-symbolic')
         close.add_css_class('flat')
+        close.add_css_class('circular')
         close.connect('clicked',lambda button:self.sidebar.set_reveal_child(False))
         header.append(close)
         box.append(header)
-        self.create=Gtk.Button(label=_("tool_create_field"))
-        self.create.connect('clicked',lambda button:self.create_field())
-        box.append(self.create)
-        self.validate=Gtk.Button(label='Check Required Fields')
-        self.validate.connect('clicked',lambda *_:self.validate_fields())
-        box.append(self.validate)
+        content=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=8,
+                        margin_start=12,margin_end=12,margin_bottom=16)
+        from .form_builder_ui import BuilderPanel,_section
+        self.builder=BuilderPanel(self)
+        content.append(self.builder.widget)
+        self.create=self.builder.tool_rows['create']
+        self.validate=self.builder.tool_rows['validate']
+        fields_header=Gtk.Box(spacing=6)
+        fields_header.append(_section(_("qf_section_fields")))
+        self.count=Gtk.Label(valign=Gtk.Align.END,visible=False)
+        self.count.add_css_class('pdflx-count-badge')
+        fields_header.append(self.count)
+        content.append(fields_header)
         self.message=Gtk.Label(xalign=0,wrap=True,max_width_chars=34,
                                wrap_mode=Pango.WrapMode.WORD_CHAR)
-        box.append(self.message)
-        scroll=Gtk.ScrolledWindow(vexpand=True,hscrollbar_policy=Gtk.PolicyType.NEVER)
-        self.rows=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=12)
-        scroll.set_child(self.rows)
+        self.message.add_css_class('dim-label')
+        self.message.add_css_class('caption')
+        content.append(self.message)
+        self.rows=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=8)
+        content.append(self.rows)
+        scroll=Gtk.ScrolledWindow(vexpand=True,hscrollbar_policy=Gtk.PolicyType.NEVER,child=content)
         box.append(scroll)
-        self.save=Gtk.Button(label=_("form_save_values"))
+        self.save=Gtk.Button(label=_("form_save_values"),margin_start=12,margin_end=12,margin_top=8,margin_bottom=12)
         self.save.add_css_class('suggested-action')
+        self.save.add_css_class('pill')
         self.save.connect('clicked',lambda button:self.save_values())
+        # Only offer saving when there are typed values to save.
+        self.save.connect('notify::sensitive',lambda button,*_:button.set_visible(button.get_sensitive()))
+        self.save.set_sensitive(False)
+        self.save.set_visible(False)
         box.append(self.save)
         self.sidebar.set_child(box)
 
@@ -67,7 +85,16 @@ class FormController:
         self.drag_start=None
 
     def draw_fields(self,cr):
-        if hasattr(self,'interaction'):self.interaction.draw(cr)
+        if hasattr(self,'builder'):
+            from .form_builder import draw_guides
+            page=self.window.doc[self.window.current_page_index] if self.window.doc else None
+            if page is not None and not page.rotation:
+                draw_guides(cr,self.builder.guides+getattr(self.interaction,'guides',[]),page.rect,self.window.zoom_level)
+            if self.sidebar.get_reveal_child():self.builder.draw_tab_numbers(cr)
+        if hasattr(self,'interaction'):
+            self.interaction.draw(cr)
+            # Page changes, undo and deletions can change what is selected.
+            if not self.interaction.drag:self.arrange_bar.request_sync()
         if not self.sidebar.get_reveal_child() or not self.fillable():
             return
         cr.save()
@@ -241,16 +268,29 @@ class FormController:
             self.rows.remove(child)
         self.create.set_sensitive(self.editable())
         self.validate.set_sensitive(self.fillable() and bool(fields))
-        self.message.set_text('Click a field to fill it. Select to move or resize; Properties edits labels and actions.' if fields else _("form_empty_hint"))
+        self.message.set_text(_("qf_fields_hint") if fields else _("qf_fields_empty"))
+        self.count.set_text(str(len(fields)))
+        self.count.set_visible(bool(fields))
         self.save.set_sensitive(self.fillable() and bool(self.pending))
+        types={7:('Text','qf-text'),2:('Checkbox','qf-checkbox'),3:('Dropdown','qf-dropdown'),4:('List','qf-list'),
+               5:('Radio','qf-radio'),6:('Signature','qf-signature'),1:('Button','qf-submit')}
         for field in fields:
-            box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=6)
-            title=Gtk.Label(label=field['name']+(' *' if field['required'] else '')+(' · read-only' if field['readonly'] else ''),xalign=0,wrap=True,
-                            max_width_chars=30,wrap_mode=Pango.WrapMode.WORD_CHAR)
+            box=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=8)
+            box.add_css_class('pdflx-card')
+            kind,icon=types.get(field['type'],('Field','qf-text'))
+            top=Gtk.Box(spacing=8)
+            top.append(Gtk.Image(icon_name=f'editor-{icon}-symbolic'))
+            names=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,hexpand=True)
+            title=Gtk.Label(label=field['name']+(' *' if field['required'] else ''),xalign=0,
+                            ellipsize=Pango.EllipsizeMode.END,tooltip_text=field['name'])
             title.add_css_class('heading')
-            box.append(title)
-            types={7:'Text',2:'Checkbox',3:'Dropdown',4:'List',5:'Radio',6:'Signature',1:'Button'}
-            box.append(Gtk.Label(label=_("form_page_label",field['page']+1)+' · '+types.get(field['type'],'Field'),xalign=0))
+            names.append(title)
+            meta=Gtk.Label(label=kind+' · '+_("form_page_label",field['page']+1)+(' · read-only' if field['readonly'] else ''),xalign=0)
+            meta.add_css_class('dim-label')
+            meta.add_css_class('caption')
+            names.append(meta)
+            top.append(names)
+            box.append(top)
             key=(field['page'],field['xref'])
             current=dict(field)
             if key in self.pending:
@@ -274,18 +314,26 @@ class FormController:
                     self.window.document_modified=True
                     self.window._update_ui_state()
                 getattr(control,'_form_signal_source',control).connect(signal,changed)
-            actions=Gtk.Box(spacing=4)
+            actions=Gtk.Box(spacing=2)
+            actions.add_css_class('pdflx-card-actions')
             go=Gtk.Button(label='Select' if self.editable() else 'Fill',
-                          tooltip_text='Select on page' if self.editable() else 'Fill on page')
+                          tooltip_text='Select on page' if self.editable() else 'Fill on page',hexpand=True,halign=Gtk.Align.START)
             def select(button,field=field):
                 self.window._load_page(field['page'])
                 if self.editable():self.interaction.select(field)
                 else:self.fill_field(field)
             go.connect('clicked',select)
             actions.append(go)
-            properties=Gtk.Button(label='Properties…',sensitive=self.editable())
+            properties=Gtk.Button(icon_name='document-properties-symbolic',tooltip_text='Properties…',sensitive=self.editable())
             properties.connect('clicked',lambda button,field=field:self.edit_field(field))
             actions.append(properties)
+            scripts=Gtk.Button(icon_name='editor-qf-scripts-symbolic',tooltip_text=_("qf_scripts"),
+                               sensitive=self.editable() and field['type']!=fitz.PDF_WIDGET_TYPE_SIGNATURE)
+            def open_scripts(button,field=field):
+                from .form_scripts_ui import FieldScriptsDialog
+                FieldScriptsDialog(self,field).present()
+            scripts.connect('clicked',open_scripts)
+            actions.append(scripts)
             duplicate=Gtk.Button(icon_name='edit-copy-symbolic',tooltip_text='Duplicate radio group (Ctrl+D)' if field['type']==fitz.PDF_WIDGET_TYPE_RADIOBUTTON else 'Duplicate field (Ctrl+D)')
             duplicate.set_sensitive(self.editable() and not field.get('signed'))
             duplicate.connect('clicked',lambda button,field=field:self.duplicate_field(field))
@@ -295,8 +343,8 @@ class FormController:
             remove.connect('clicked',lambda button,field=field:self.window._mutate_document(
                 lambda:tools.delete_form_field(doc,field['page'],field['xref']),page_num=field['page']))
             actions.append(remove)
+            for child in (go,properties,scripts,duplicate,remove):child.add_css_class('flat')
             box.append(actions)
-            box.append(Gtk.Separator())
             self.rows.append(box)
 
     def duplicate_field(self,field):
@@ -602,8 +650,83 @@ class FormController:
         index=next((i for i,f in enumerate(fields) if f['xref']==field['xref']),None)
         if fields and index is not None:self.fill_field(fields[(index+(-1 if backwards else 1))%len(fields)])
 
-    def click_field(self,field):
-        if hasattr(self,'interaction') and self.editable():self.interaction.select(field)
+    def arrange_fields(self,operation):
+        """Align, distribute or resize the selected fields as one undo step."""
+        from .form_arrange import arrange
+        fields=self.interaction.fields()
+        if len(fields)<2 or not self.editable() or not self.finish_inline():return
+        if operation=='match_style':
+            from .form_builder import APPEARANCE_KEYS
+            first=fields[0]
+            self.restyle(fields[1:],{key:first[key] for key in APPEARANCE_KEYS})
+            return
+        source=self.window.doc;page=source[fields[0]['page']]
+        visual=[fitz.Rect(f['rect'])*page.rotation_matrix for f in fields]
+        changes=[(field,rect*page.derotation_matrix) for field,rect in
+                 zip(fields,arrange(visual,operation,page.rect))]
+        changes=[(field,rect) for field,rect in changes
+                 if any(abs(a-b)>.01 for a,b in zip(rect,field['rect']))]
+        if not changes:return
+        def mutate():
+            for field,rect in changes:
+                tools.edit_form_field(source,field['page'],field['xref'],field['name'],field['required'],
+                                      field['max_length'],rect=rect)
+        self.window._mutate_document(mutate,page_num=fields[0]['page'])
+
+    def restyle(self,fields,options):
+        """Apply appearance options to several fields as one undo step."""
+        source=self.window.doc
+        targets=[f for f in fields if f['type']!=fitz.PDF_WIDGET_TYPE_SIGNATURE]
+        if not targets or not self.editable() or not self.finish_inline():return
+        def mutate():
+            for field in targets:
+                current={key:options[key] for key in options}
+                if field['type']==fitz.PDF_WIDGET_TYPE_CHECKBOX:
+                    current.pop('font',None);current.pop('font_size',None)
+                if field['type']==fitz.PDF_WIDGET_TYPE_BUTTON:
+                    # Buttons keep their own colors; only borders and fonts follow.
+                    for key in ('fill_color','text_color'):current.pop(key,None)
+                tools.edit_form_field(source,field['page'],field['xref'],field['name'],field['required'],
+                                      field['max_length'],options=current)
+        if self.window._mutate_document(mutate,page_num=targets[0]['page']):
+            self.window.status_label.set_text(_("qf_restyled",len(targets)))
+
+    def multiple_copies(self,fields,rows,columns,gap_x,gap_y):
+        """Tile copies of the fields (as a block) into rows and columns."""
+        from .form_duplication import duplicate_form_field
+        source=self.window.doc;number=fields[0]['page'];page=source[number]
+        block=fitz.Rect(fields[0]['rect'])
+        for field in fields[1:]:block|=fitz.Rect(field['rect'])
+        step_x,step_y=block.width+gap_x,block.height+gap_y
+        last=fitz.Rect(block.x0,block.y0,block.x0+step_x*(columns-1)+block.width,block.y0+step_y*(rows-1)+block.height)
+        if not last in page.rect*page.derotation_matrix:
+            self.window.status_label.set_text(_("qf_copies_too_many"));return
+        def mutate():
+            names={f['name'] for f in features.list_form_fields(source)}
+            for row in range(rows):
+                for column in range(columns):
+                    if row==0 and column==0:continue
+                    dx,dy=column*step_x,row*step_y
+                    for field in fields:
+                        _page,new=duplicate_form_field(source,number,field['xref'])[0]
+                        copy=next(f for f in features.list_form_fields(source,[number]) if f['xref']==new)
+                        base=re.sub(r'_\d+$','',field['name']);index=2
+                        while f'{base}_{index}' in names:index+=1
+                        name=f'{base}_{index}';names.add(name)
+                        x0,y0,x1,y1=field['rect']
+                        tools.edit_form_field(source,number,copy['xref'],name,copy['required'],copy['max_length'],
+                                              rect=(x0+dx,y0+dy,x1+dx,y1+dy))
+        if self.window._mutate_document(mutate,page_num=number):
+            self.window.status_label.set_text(_("qf_copies_done",rows*columns-1))
+            self.refresh()
+
+    def click_field(self,field,extend=False):
+        if hasattr(self,'interaction') and self.editable():
+            if extend and field['type']!=fitz.PDF_WIDGET_TYPE_SIGNATURE:
+                # Shift/Ctrl-click only builds the selection; it does not fill.
+                if self.finish_inline():self.interaction.select(field,extend=True)
+                return
+            self.interaction.select(field)
         if not self.fillable() or field['readonly']:return
         editor=getattr(self,'inline_editor',None)
         if editor and editor.key!=(field['page'],field['xref']) and not editor.finish():return
@@ -630,11 +753,8 @@ class FormController:
             elif action=='javascript':
                 self.run_button_script(field)
             elif action=='submit':
-                from .dialogs import alert
-                def answer(response):
-                    if response=='export':self.window.lookup_action('form_export_data').activate(None)
-                alert(self.window,_("button_submit_title"),_("button_submit_body",(destination or {}).get('url','')),
-                      [('close',_("btn_close"),None),('export',_("button_submit_export"),'suggested')],'export','close',answer)
+                from .form_submit import FormSubmission
+                FormSubmission(self,destination).start()
             else:self.window.status_label.set_text(_("button_no_action"))
             return
         if field['type'] in (fitz.PDF_WIDGET_TYPE_CHECKBOX,fitz.PDF_WIDGET_TYPE_RADIOBUTTON):
@@ -662,6 +782,14 @@ class FormController:
         endx=max(0,min(visible.width,x+dx))
         endy=max(0,min(visible.height,y+dy))
         self.visual_bounds=fitz.Rect(min(x,endx),min(y,endy),max(x,endx),max(y,endy))
+        self.builder.guides=[]
+        from .form_builder import style,snap_rect
+        if style()['snap'] and self.visual_bounds.width>=4:
+            page=self.window.doc[self.window.current_page_index]
+            others=[fitz.Rect(f['rect'])*page.rotation_matrix for f in features.list_form_fields(self.window.doc,[self.window.current_page_index])]
+            # Both the starting corner and the dragged corner line up with nearby fields.
+            self.visual_bounds,self.builder.guides=snap_rect(self.visual_bounds,others,5/self.window.zoom_level,
+                                                             page=visible)
         self.window.temp_shape.bbox=tuple(self.visual_bounds*self.window.doc[self.window.current_page_index].derotation_matrix)
         self.window.pdf_view.queue_draw()
 
@@ -669,6 +797,11 @@ class FormController:
         self.update_drag(dx,dy)
         bounds=self.visual_bounds
         self.window.temp_shape=None
+        self.builder.guides=[]
+        if self.draw_settings.get('builder'):
+            self.builder.place(bounds,self.drag_start)
+            self.window.pdf_view.queue_draw()
+            return
         if bounds.width<10 or bounds.height<10:
             self.window.status_label.set_text(_("form_draw_too_small"))
             self.window.pdf_view.queue_draw()

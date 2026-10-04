@@ -58,7 +58,7 @@ _STRINGS = {
         "tool_border_none": "None",
         "tool_border_solid": "Solid",
         "tool_border_double": "Double",
-        "tool_fill_forms": "Fill Form Fields…",
+        "tool_fill_forms": "Build & Fill Forms…",
         "tool_stamp_place": "Drag stamps to move, corner handles to resize, or the round handle to tilt. Double-click to edit style.",
         "tool_stamp_angle": "Tilt angle (°)",
         "element_properties": "Properties…",

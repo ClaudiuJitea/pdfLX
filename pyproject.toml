@@ -24,7 +24,7 @@ Homepage = "https://github.com/ClaudiuJitea/pdfLX"
 Issues = "https://github.com/ClaudiuJitea/pdfLX/issues"
 
 [tool.setuptools]
-packages = ["pdflx", "pdflx.ops", "pdflx.features"]
+packages = ["pdflx", "pdflx.ops", "pdflx.features", "pdflx.ai"]
 
 [tool.setuptools.dynamic]
 version = {attr = "pdflx.constants.APP_VERSION"}

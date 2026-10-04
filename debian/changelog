@@ -1,3 +1,18 @@
+pdflx (0.4) noble; urgency=medium
+
+  * AI assistant (OpenRouter, user-chosen model) that edits documents, builds
+    forms, adds pages, and recreates pages from pictures.
+  * Form builder with quick fields, form style, labels, alignment guides,
+    multiple copies, tab order, field detection, and field scripts.
+  * Multi-field align/distribute/size, form submission, and new shapes,
+    lines, arrows, and shape options.
+  * Find and Replace, sensitive-data redaction, Organize Pages, stacking
+    order, and alignment guides for all objects.
+  * Reorganized menus and toolbar.
+  * Fix text moving when edited and an undo problem with later text edits.
+
+ -- pdfLX contributors <pdflx@localhost>  Sun, 04 Oct 2026 18:00:00 +0200
+
 pdflx (0.3.1) noble; urgency=medium
 
   * Fix table borders below text being detected as underlines, which erased

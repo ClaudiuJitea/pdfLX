@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.4 — 2026-10-04
+
+- **AI assistant** (Ctrl+K): a floating or docked bar that edits the open document through
+  OpenRouter with the model you choose. It changes one or many elements at once, adds and
+  deletes pages, opens new documents, builds fillable forms, and recreates a page from an
+  attached picture or PDF. Each request is a single undo step; the API key is kept in the
+  system keyring.
+- **Form builder**: Build & Fill Forms opens a sidebar where you type a label, pick a field
+  type (text, paragraph, date, email, phone, number, dropdown, list, checkbox, radio,
+  signature, submit, reset), and drag on the page. Fields get names, labels, tooltips, a
+  shared form style, and input checks. Also multiple copies, apply/match style, tab order,
+  field detection on printed forms, and a per-field JavaScript editor with examples.
+- **Form field arrangement**: select several fields with Shift/Ctrl-click to align,
+  distribute, and make them the same size; drag them together.
+- **Form submission**: submit buttons send the form (HTML, FDF, XFDF, or PDF) after
+  confirmation and show the server's answer; mailto buttons open the email app.
+- **Shapes and lines**: rounded rectangles, triangles, diamonds, pentagons, hexagons,
+  stars, block arrows, and speech callouts; corner radius, opacity, dashed and dotted
+  outlines, no-outline fills; straight Line and Arrow tools with angle snapping.
+- **Stacking order**: Bring to Front and Send to Back (Ctrl+] / Ctrl+[), including
+  shapes placed behind the PDF's own text.
+- **Find and Replace** (Ctrl+H) with a reviewable list of changes, regular expressions,
+  and one undo step.
+- **Sensitive-data redaction**: find emails, web addresses, IBANs and card numbers
+  (checksum-verified), dates, phone numbers, and ID numbers.
+- **Organize Pages**: a thumbnail grid to reorder by drag and drop, rotate, duplicate,
+  delete, insert, and extract pages.
+- **Alignment guides** for text, images, shapes, drawings, and form fields.
+- Reorganized main menu and left toolbar, grouped by task with the most used tools first.
+- Fixed editing text making it jump from its position, and an undo problem that could
+  stop the next text edit with "cannot find object in xref".
+
 ## 0.3.1 — 2026-10-03
 
 - Fixed table borders just below a cell's text being mistaken for an underline. Editing

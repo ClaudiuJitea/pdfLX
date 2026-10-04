@@ -106,7 +106,7 @@ class ElementMenu:
         kind,obj=target
         interaction=getattr(getattr(w,'form_tools',None),'interaction',None)
         if interaction:
-            if kind=='field':interaction.select(obj)
+            if kind=='field':interaction.select(obj,keep=True)
             else:interaction.selected=None
         if kind=='table': w._select_table(obj)
         elif kind=='object':
@@ -154,6 +154,10 @@ class ElementMenu:
             copy_button=button('table_copy',lambda _kind,table:w.copy_table(table))
             copy_button.set_sensitive(w._active_session.can_copy)
             button('table_style', self.table_style)
+        if kind=='object':
+            from .layering import restack
+            button('element_bring_front',lambda _kind,item:restack(w,item,True))
+            button('element_send_back',lambda _kind,item:restack(w,item,False))
         button('element_properties',self.properties)
         duplicate=button('element_duplicate',self.duplicate)
         delete=button('delete_confirm',self.delete,True)

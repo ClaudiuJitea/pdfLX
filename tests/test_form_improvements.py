@@ -460,9 +460,9 @@ class FormImprovementsTests(unittest.TestCase):
         w.get_focus=lambda:None
         form=SimpleNamespace(window=w,source=first,pending={(0,x):'Draft'},
              sidebar=SimpleNamespace(get_reveal_child=lambda:True),rows=Node(),create=Mock(),save=Mock(),
-             message=Mock(),validate=Mock(),editable=lambda:True,fillable=lambda:True,
+             message=Mock(),validate=Mock(),count=Mock(),editable=lambda:True,fillable=lambda:True,
              value_control=lambda f:(Mock(),lambda:f['value'],'changed'))
-        with patch('pdflx.form_ui.Gtk.Box',Node),patch('pdflx.form_ui.Gtk.Label',Node),patch('pdflx.form_ui.Gtk.Button',Node),patch('pdflx.form_ui.Gtk.Separator',Node):
+        with patch('pdflx.form_ui.Gtk.Box',Node),patch('pdflx.form_ui.Gtk.Label',Node),patch('pdflx.form_ui.Gtk.Button',Node),patch('pdflx.form_ui.Gtk.Separator',Node),patch('pdflx.form_ui.Gtk.Image',Node):
             w.doc=second
             FormController.refresh(form)
             self.assertEqual(form.pending,{})

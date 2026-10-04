@@ -94,50 +94,11 @@ cp AppDir/usr/lib/librsvg-2.so* AppDir/usr/lib/gdk-pixbuf-2.0/2.10.0/loaders/ 2>
 echo "--- Generating AppImage ---"
 build_tmp/linuxdeploy --appdir AppDir --output appimage --desktop-file=pdflx.desktop --icon-file=pdflx/img/pdflx.png
 
-# Standardized AppImage naming for architecture
+# One AppImage per architecture; the .deb is built separately by build-deb.sh.
 GENERATED_APPIMAGE="$(ls pdfLX*${LINUXDEPLOY_ARCH}.AppImage 2>/dev/null || ls *.AppImage 2>/dev/null | head -n 1)"
-if [ -f "$GENERATED_APPIMAGE" ]; then
+if [ -f "$GENERATED_APPIMAGE" ] && [ "$GENERATED_APPIMAGE" != "pdflx-${ARCH_NAME}.AppImage" ]; then
     mv "$GENERATED_APPIMAGE" "pdflx-${ARCH_NAME}.AppImage"
-    # Keep legacy symlink / copy for x86_64 compatibility
-    if [ "$ARCH_NAME" = "x86_64" ]; then
-        cp "pdflx-${ARCH_NAME}.AppImage" pdflx.AppImage
-    fi
 fi
 
-echo "--- Packaging portable distribution archives ---"
-# 1. tar.gz
-tar -czf "pdflx-linux-${ARCH_NAME}.tar.gz" AppDir
-if [ "$ARCH_NAME" = "x86_64" ]; then
-    cp "pdflx-linux-${ARCH_NAME}.tar.gz" pdflx-linux-x64.tar.gz
-fi
-
-# 2. tar.xz
-tar -cJf "pdflx-linux-${ARCH_NAME}.tar.xz" AppDir
-
-# 3. zip
-if command -v zip >/dev/null 2>&1; then
-    zip -q -r9 "pdflx-linux-${ARCH_NAME}.zip" AppDir
-fi
-
-# 4. 7z
-if command -v 7z >/dev/null 2>&1; then
-    7z a -mx=9 "pdflx-linux-${ARCH_NAME}.7z" AppDir >/dev/null
-fi
-
-echo "--- Building Debian package ---"
-mkdir -p debian_build
-rsync -a --exclude=debian_build --exclude=AppDir --exclude=build_tmp . debian_build/
-cd debian_build
-dpkg-buildpackage -us -uc 2>&1 || true
-cd ..
-
-# Collect debian artifacts: .deb, .buildinfo, .changes, .dsc, .tar.xz
-mv debian_build/../*.deb ./ 2>/dev/null || true
-mv debian_build/../*.buildinfo ./ 2>/dev/null || true
-mv debian_build/../*.changes ./ 2>/dev/null || true
-mv debian_build/../*.dsc ./ 2>/dev/null || true
-mv debian_build/../*.tar.xz ./ 2>/dev/null || true
-mv pdflx_* ./ 2>/dev/null || true
-
-rm -rf debian_build build_tmp
-echo "=== Build completed for $ARCH_NAME ==="
+rm -rf build_tmp
+echo "=== Built pdflx-${ARCH_NAME}.AppImage ==="

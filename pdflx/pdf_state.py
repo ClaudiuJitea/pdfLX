@@ -34,7 +34,11 @@ class PdfState:
         if window.doc is not self.doc:
             raise ValueError('The document for this history entry is no longer active.')
         for xref in range(1, self.doc.xref_length()):
-            obj, stream = self.objects.get(xref, ('null', None))
+            if xref not in self.objects:
+                # Created after this snapshot: nothing restored references it any more, but
+                # MuPDF's font/image caches may, so keep it; saving garbage-collects it.
+                continue
+            obj, stream = self.objects[xref]
             self.doc.update_object(xref, obj)
             if stream is not None:
                 self.doc.update_stream(xref, stream)
