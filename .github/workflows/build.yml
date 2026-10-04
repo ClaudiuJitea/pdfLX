@@ -61,6 +61,9 @@ jobs:
         run: |
           chmod +x build-deb.sh
           ./build-deb.sh
+          # Offline packages bundle the Python libraries for both CPUs (wheels are cross-downloaded).
+          ./build-deb.sh --offline --arch amd64
+          ./build-deb.sh --offline --arch arm64
           mv dist/*.deb .
 
       - name: Upload build artifacts
@@ -91,7 +94,21 @@ jobs:
       - name: Release notes from CHANGELOG.md
         run: |
           version="${GITHUB_REF_NAME#v}"
-          awk -v v="$version" '$0 ~ "^## "v" " {found=1; next} found && /^## / {exit} found' CHANGELOG.md > release-notes.md
+          {
+            echo "### Which file?"
+            echo
+            echo "| File | For |"
+            echo "|---|---|"
+            echo "| \`pdflx-x86_64.AppImage\` / \`pdflx-aarch64.AppImage\` | Any Linux distribution, nothing to install: \`chmod +x\` and run. |"
+            echo "| \`pdflx_${version}_all.deb\` | Ubuntu 24.04+ / Debian 13+, small download; Python libraries are downloaded during installation. |"
+            echo "| \`pdflx_${version}_offline_amd64.deb\` / \`pdflx_${version}_offline_arm64.deb\` | Ubuntu 24.04+ / Debian 13+ without internet access: all Python libraries are included. |"
+            echo
+            echo "Install a \`.deb\` with \`sudo apt install ./<file>.deb\`."
+            echo
+            echo "### What's new"
+            echo
+            awk -v v="$version" '$0 ~ "^## "v" " {found=1; next} found && /^## / {exit} found' CHANGELOG.md
+          } > release-notes.md
           echo "=== Release notes ===" && cat release-notes.md
           echo "=== Release assets ===" && ls -lh release-assets/
 

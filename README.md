@@ -86,6 +86,10 @@ This installs the **pdfLX** launcher and the `pdflx-cli` command. Requirements: 
 dependencies; the installer downloads the Python libraries (PyMuPDF, pdf2docx, pyHanko)
 into `/opt/pdflx/.venv`, so internet access is needed during installation.
 
+No internet on the target computer? Use `pdflx_<version>_offline_amd64.deb` (or
+`_offline_arm64.deb` for ARM) instead: it includes the Python libraries (about 170 MB) and
+installs without a network connection.
+
 ### AppImage (any Linux distribution)
 
 Download `pdflx-x86_64.AppImage` (or `pdflx-aarch64.AppImage` for ARM) from the
@@ -156,7 +160,7 @@ pdflx-cli --help
 
 ```sh
 ./build-deb.sh            # dist/pdflx_<version>_all.deb
-./build-deb.sh --offline  # bundles Python wheels for offline installs on matching systems
+./build-deb.sh --offline --arch amd64   # dist/pdflx_<version>_offline_amd64.deb
 ./build-appimage.sh       # pdflx-<arch>.AppImage
 ```
 
