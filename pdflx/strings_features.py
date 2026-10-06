@@ -6,6 +6,13 @@ main menu group labels are translated below.
 """
 
 STRINGS_EN = {
+    'updates_title': 'Check for Updates',
+    'updates_checking': 'Checking for updates…',
+    'updates_available': 'Version {} is available.',
+    'updates_current': 'Up to date',
+    'updates_none': 'No releases available yet.',
+    'updates_failed': 'Could not check. Please try again.',
+    'updates_view': 'View Update',
     # Generic
     'btn_add': 'Add', 'btn_choose': 'Choose…', 'btn_collate': 'Collate', 'btn_create': 'Create',
     'btn_dismiss': 'Dismiss', 'btn_export': 'Export…', 'btn_extract': 'Extract', 'btn_find_remove': 'Find and Remove',
@@ -314,7 +321,7 @@ STRINGS_EN = {
     'search_case': 'Match case', 'search_whole_word': 'Whole words only', 'search_results': 'Results',
     'search_find_all': 'Find All', 'search_found': '{} match(es).', 'search_enter_query': 'Enter text to find.',
     'search_option_case': 'Match case', 'search_option_word': 'Whole words only',
-    'search_option_regex': 'Regular expression',
+    'search_option_regex': 'Regular expression', 'search_options': 'Search options',
     'text_style_details': 'Text under the selection', 'text_style_text': 'Text', 'text_style_font': 'Font',
     'text_style_size': 'Size', 'text_style_color': 'Color', 'text_style_bold': 'Bold',
     'text_style_italic': 'Italic', 'text_style_opacity': 'Opacity', 'text_style_render': 'Rendering',

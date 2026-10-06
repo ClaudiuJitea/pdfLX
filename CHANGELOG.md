@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.4.1 — 2026-10-06
+
+- Redesigned the PDF search bar with integrated result counts, navigation,
+  and a single menu for match options, Find and Replace, and Advanced Search.
+- Replaced the arrow-shaped clear-search icon with a simple close icon.
+- Added a GitHub release update check inside About, with a compact status
+  and a link to a newer release when available.
+- Restyled the license viewer with readable paragraphs, section headings,
+  improved spacing, and a dedicated reading area.
+
 ## 0.4 — 2026-10-04
 
 - **AI assistant** (Ctrl+K): a floating or docked bar that edits the open document through

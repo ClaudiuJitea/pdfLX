@@ -1,13 +1,15 @@
 from pathlib import Path
+import threading
 
 import gi
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, Gtk
+from gi.repository import Adw, Gdk, GLib, Gtk
 
 from . import constants
 from .i18n import _
+from .updates import NoReleasesError, fetch_latest_release
 
 
 class AboutWindow(Adw.Window):
@@ -18,6 +20,10 @@ class AboutWindow(Adw.Window):
                          title=f'{_("menu_about")} {constants.APP_NAME}',
                          default_width=420, default_height=430)
         self.add_css_class("pdflx-about")
+        self._closed = False
+        self._checking_updates = False
+        self._update_url = None
+        self.connect('close-request', self._on_close)
         layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.set_content(layout)
         header = Adw.HeaderBar()
@@ -40,6 +46,17 @@ class AboutWindow(Adw.Window):
                             halign=Gtk.Align.CENTER)
         version.add_css_class("about-version")
         body.append(version)
+        update_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.update_button = Gtk.Button(label=_("updates_title"), halign=Gtk.Align.CENTER)
+        self.update_button.add_css_class('flat')
+        self.update_button.connect('clicked', self._on_update_clicked)
+        update_box.append(self.update_button)
+        self.update_status = Gtk.Label(visible=False, wrap=True, max_width_chars=38,
+                                       justify=Gtk.Justification.CENTER)
+        self.update_status.add_css_class('dim-label')
+        self.update_status.add_css_class('caption')
+        update_box.append(self.update_status)
+        body.append(update_box)
         description = Gtk.Label(label=_("about_tagline"), wrap=True, max_width_chars=38,
                                 justify=Gtk.Justification.CENTER, margin_top=8)
         description.add_css_class("about-description")
@@ -70,21 +87,55 @@ class AboutWindow(Adw.Window):
             return True
         return False
 
+    def _on_close(self, _window):
+        self._closed = True
+        return False
+
+    def _on_update_clicked(self, _button):
+        if self._update_url:
+            Gtk.UriLauncher.new(self._update_url).launch(self, None, None, None)
+        else:
+            self.check_updates()
+
+    def check_updates(self):
+        if self._closed or self._checking_updates:
+            return
+        self._checking_updates = True
+        self._update_url = None
+        self.update_button.set_label(_("updates_checking"))
+        self.update_button.set_sensitive(False)
+        self.update_status.set_visible(False)
+
+        def worker():
+            try:
+                release = fetch_latest_release()
+            except NoReleasesError:
+                GLib.idle_add(self._finish_update_check, None, 'updates_none')
+            except Exception:
+                GLib.idle_add(self._finish_update_check, None, 'updates_failed')
+            else:
+                GLib.idle_add(self._finish_update_check, release, None)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_update_check(self, release, error):
+        if self._closed:
+            return GLib.SOURCE_REMOVE
+        self._checking_updates = False
+        self._update_url = None
+        self.update_button.set_sensitive(True)
+        self.update_button.set_label(_("updates_title"))
+        if error:
+            self.update_status.set_text(_(error))
+        elif release.newer_than():
+            self._update_url = release.url
+            self.update_button.set_label(_("updates_view"))
+            self.update_status.set_text(_("updates_available", release.version))
+        else:
+            self.update_status.set_text(_("updates_current"))
+        self.update_status.set_visible(True)
+        return GLib.SOURCE_REMOVE
+
     def _show_license(self, button):
-        window = Adw.Window(transient_for=self, modal=True,
-                            title=_("about_tab_license"), default_width=640, default_height=520)
-        layout = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        header = Adw.HeaderBar()
-        header.set_title_widget(Adw.WindowTitle(title=_("about_tab_license"),
-                                              subtitle="GPL-3.0-or-later"))
-        layout.append(header)
-        text = Gtk.TextView(editable=False, cursor_visible=False,
-                            wrap_mode=Gtk.WrapMode.WORD_CHAR, left_margin=24, right_margin=24,
-                            top_margin=20, bottom_margin=20)
-        license_path = Path(__file__).parent / "COPYING"
-        text.get_buffer().set_text(license_path.read_text(encoding="utf-8"))
-        scroll = Gtk.ScrolledWindow(vexpand=True, hexpand=True)
-        scroll.set_child(text)
-        layout.append(scroll)
-        window.set_content(layout)
+        from .license_window import LicenseWindow
+        window = LicenseWindow(self)
         window.present()

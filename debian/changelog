@@ -1,3 +1,11 @@
+pdflx (0.4.1) noble; urgency=medium
+
+  * Restyle the PDF search bar and simplify its options menu.
+  * Add a GitHub update check inside About.
+  * Improve the license viewer typography and layout.
+
+ -- pdfLX contributors <pdflx@localhost>  Tue, 06 Oct 2026 08:00:00 +0200
+
 pdflx (0.4) noble; urgency=medium
 
   * AI assistant (OpenRouter, user-chosen model) that edits documents, builds

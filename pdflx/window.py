@@ -967,46 +967,90 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         self.search_revealer = Gtk.Revealer()
         self.search_revealer.set_transition_type(Gtk.RevealerTransitionType.SLIDE_DOWN)
-        search_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-        search_box.add_css_class("search-toolbar")
+        search_toolbar = Gtk.Box()
+        search_toolbar.add_css_class("search-toolbar")
+        search_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        search_clamp = Adw.Clamp(maximum_size=960, tightening_threshold=720, hexpand=True)
+        search_clamp.set_child(search_box)
+        search_toolbar.append(search_clamp)
+        search_field = Gtk.Box(spacing=2, hexpand=True, valign=Gtk.Align.CENTER)
+        search_field.add_css_class("search-field")
         self.search_entry = Gtk.SearchEntry(hexpand=True)
+        clear_icon = self.search_entry.get_last_child()
+        if isinstance(clear_icon, Gtk.Image):
+            clear_icon.set_from_icon_name('window-close-symbolic')
+            clear_icon.set_pixel_size(14)
         self.search_entry.set_placeholder_text(_("search_placeholder"))
         self.search_entry.connect("search-changed", self._on_search_changed)
         self.search_entry.connect("activate", lambda entry: self._step_search(1))
         self.search_entry.connect("stop-search", lambda entry: self._hide_search())
-        search_box.append(self.search_entry)
+        search_field.append(self.search_entry)
+        self.search_count_label = Gtk.Label(label="", valign=Gtk.Align.CENTER,
+                                          ellipsize=Pango.EllipsizeMode.END, max_width_chars=22,
+                                          margin_start=8, margin_end=10)
+        self.search_count_label.add_css_class("search-count")
+        search_field.append(self.search_count_label)
+        search_box.append(search_field)
+
+        def search_control(button):
+            button.add_css_class('flat')
+            button.add_css_class('search-control')
+            button.set_valign(Gtk.Align.CENTER)
+            button.update_property([Gtk.AccessibleProperty.LABEL], [button.get_tooltip_text()])
+            return button
+
         # Match options; any active option routes search through ops.text.
+        options_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10,
+                              margin_top=12, margin_bottom=8, margin_start=12, margin_end=12)
+        options_popover = Gtk.Popover(child=options_box)
+        options_button = search_control(Gtk.MenuButton(icon_name='view-more-horizontal-symbolic',
+                                                       tooltip_text=_("search_options"),
+                                                       popover=options_popover))
         self.search_option_buttons = {}
-        for key, label in (('case', 'Aa'), ('word', 'W'), ('regex', '.*')):
-            toggle = Gtk.ToggleButton(label=label, tooltip_text=_(f"search_option_{key}"))
-            toggle.add_css_class('flat')
-            toggle.connect('toggled', lambda _button: self._on_search_changed(self.search_entry))
+
+        def search_options_changed(_button):
+            active = any(button.get_active() for button in self.search_option_buttons.values())
+            if active:
+                options_button.add_css_class('search-options-active')
+            else:
+                options_button.remove_css_class('search-options-active')
+            self._on_search_changed(self.search_entry)
+
+        for key in ('case', 'word', 'regex'):
+            toggle = Gtk.CheckButton(label=_(f"search_option_{key}"))
+            toggle.connect('toggled', search_options_changed)
             self.search_option_buttons[key] = toggle
-            search_box.append(toggle)
-        replace_button = Gtk.Button(label=_("replace_button"), tooltip_text=_("replace_title") + ' (Ctrl+H)',
-                                    action_name='win.find_replace')
-        replace_button.add_css_class('flat')
-        search_box.append(replace_button)
-        more = Gtk.Button(icon_name='view-more-horizontal-symbolic', tooltip_text=_("menu_advanced_search"),
-                          action_name='win.advanced_search')
-        more.add_css_class('flat')
-        search_box.append(more)
-        self.search_count_label = Gtk.Label(label="")
-        self.search_count_label.add_css_class("dim-label")
-        search_box.append(self.search_count_label)
+            options_box.append(toggle)
+        options_box.append(Gtk.Separator(margin_top=4, margin_bottom=2))
+        for title, action in ((_("replace_title"), 'win.find_replace'),
+                              (_("menu_advanced_search"), 'win.advanced_search')):
+            button = Gtk.Button(label=title, action_name=action)
+            button.add_css_class('flat')
+            button.connect('clicked', lambda _button: options_popover.popdown())
+            options_box.append(button)
+        search_field.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL,
+                                          margin_top=10, margin_bottom=10, margin_end=4))
+        navigation = Gtk.Box(spacing=2, valign=Gtk.Align.CENTER)
         self.search_prev_button = Gtk.Button.new_from_icon_name("go-up-symbolic")
         self.search_prev_button.set_tooltip_text(_("search_previous_tip"))
+        search_control(self.search_prev_button)
+        self.search_prev_button.set_sensitive(False)
         self.search_prev_button.connect("clicked", lambda button: self._step_search(-1))
-        search_box.append(self.search_prev_button)
+        navigation.append(self.search_prev_button)
         self.search_next_button = Gtk.Button.new_from_icon_name("go-down-symbolic")
         self.search_next_button.set_tooltip_text(_("search_next_tip"))
+        search_control(self.search_next_button)
+        self.search_next_button.set_sensitive(False)
         self.search_next_button.connect("clicked", lambda button: self._step_search(1))
-        search_box.append(self.search_next_button)
+        navigation.append(self.search_next_button)
+        search_field.append(navigation)
+        search_field.append(options_button)
         close_search = Gtk.Button.new_from_icon_name("window-close-symbolic")
         close_search.set_tooltip_text(_("search_close_tip"))
+        search_control(close_search)
         close_search.connect("clicked", lambda button: self._hide_search())
-        search_box.append(close_search)
-        self.search_revealer.set_child(search_box)
+        search_field.append(close_search)
+        self.search_revealer.set_child(search_toolbar)
         self.main_box.append(self.search_revealer)
 
         self.tab_view = Adw.TabView()
@@ -2009,6 +2053,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         action_about.connect('activate', self.on_about_activated)
         self.add_action(action_about)
 
+        action_updates = Gio.SimpleAction.new('check_updates', None)
+        action_updates.connect('activate', self.on_check_updates)
+        self.add_action(action_updates)
+
         action_new = Gio.SimpleAction.new('new', None)
         action_new.connect('activate', lambda a, p: self.on_new_clicked(None))
         self.add_action(action_new)
@@ -2491,9 +2539,16 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._page_scroll_delta=0
         self.continuous_view.sync()
 
+    def on_check_updates(self, action=None, param=None):
+        self.on_about_activated(None, None)
+        self._about_window.check_updates()
+
     def on_about_activated(self, action, param):
         """Show pdfLX product information."""
-        AboutWindow(self).present()
+        existing = getattr(self, '_about_window', None)
+        if existing is None or existing._closed:
+            self._about_window = AboutWindow(self)
+        self._about_window.present()
 
     def _record_recent_file(self, filepath):
         """Prepend filepath to recent_opened_files setting, deduplicate, and limit to 15."""
