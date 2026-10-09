@@ -65,6 +65,7 @@ if PdfEditorWindow:
         '_find_image_at_pos', '_find_shape_at_pos', '_find_stroke_at_pos',
         'commit_pending_format_change', '_find_table_at_pos', '_select_table',
         '_update_table_drag', '_clear_table_preview', '_is_table_preview_member', '_cancel_table_drag',
+        '_drag_past_threshold',
     ):
         setattr(CanvasHarness, method, getattr(PdfEditorWindow, method))
     # Drag tests check exact positions; alignment guides are covered by ui_pro_features_smoke.
@@ -140,6 +141,25 @@ class CanvasDragTests(unittest.TestCase):
         window.undo_manager.redo()
         self.assertEqual(obj.bbox, moved)
         self.assertIsNone(window.dragged_object)
+
+    def test_click_with_slight_hand_movement_leaves_every_object_in_place(self):
+        for obj in self.objects():
+            with self.subTest(kind=type(obj).__name__):
+                window = CanvasHarness(obj, zoom=2)
+                self.addCleanup(window.doc.close)
+                snap = Mock(side_effect=lambda rect, move=False, edges=(): rect + (0, -4, 0, -4))
+                window._snap_object_rect = snap
+                old = copy.deepcopy(obj.__dict__)
+                gesture = self.start(window, obj)
+                window.on_drag_update(gesture, 2, -3)
+                window.on_drag_end(gesture, 3, -2)
+                self.assertEqual(obj.bbox, old['bbox'])
+                snap.assert_not_called()
+                self.assertEqual(window.undo_manager.undo_stack, [])
+                # A deliberate drag still moves it.
+                gesture = self.start(window, obj)
+                window.on_drag_update(gesture, 40, 0)
+                self.assertNotEqual(obj.bbox, old['bbox'])
 
     def test_empty_canvas_does_not_start_object_drag(self):
         obj = self.objects()[2]

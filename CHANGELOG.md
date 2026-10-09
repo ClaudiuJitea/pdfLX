@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.2 — 2026-10-09
+
+- Clicking an element to select it no longer moves it: a drag now starts only after the
+  pointer travels a few pixels, so a slight hand movement no longer nudges or snaps
+  text, images, shapes, lines, or tables.
+- Moving, resizing, or deleting an original table cell or shape keeps the text above it
+  visible and no longer adds black outlines to fill-only cells.
+- Editing a shape no longer erases or reorders neighbouring graphics: adjacent cells,
+  table grids, background bars, page backgrounds, and links stay exactly as they were.
+- Shapes on top of background images stay visible after editing.
+- Rounded boxes, triangles, and other original outlines keep their exact shape when
+  edited, and curved lines stay curved.
+- Thin rules and separator lines drawn as narrow rectangles can now be selected and
+  edited like any other line.
+
 ## 0.4.1 — 2026-10-06
 
 - Redesigned the PDF search bar with integrated result counts, navigation,

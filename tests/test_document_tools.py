@@ -86,6 +86,138 @@ class DocumentToolsTests(unittest.TestCase):
         self.assertEqual(window.undo_manager.undo_stack,[])
         self.assertFalse(getattr(obj,'_ghost_redacted',False))
 
+    def test_moving_original_cell_background_keeps_text_on_top_without_outline(self):
+        window=self.window()
+        page=window.doc[0]
+        green=(0.72,0.87,0.78)
+        for rect in ((40,100,80,135),(80,100,400,135),(400,100,450,135)):
+            page.draw_rect(rect,color=None,fill=green)
+        page.insert_text((150,120),'Header',color=(0,0,0))
+        pdf_handler.save_page_snapshot(window.doc,0,force=True)
+        window.editable_texts=pdf_handler.extract_editable_text(window.doc,0)[0]
+        window.editable_shapes=pdf_handler.extract_editable_shapes(window.doc,0)[0]
+        self.cache(window)
+        self.assertTrue(all(shape.stroke_width==0 for shape in window.editable_shapes))
+        cell=next(shape for shape in window.editable_shapes if shape.bbox[0]==80)
+        old=copy.deepcopy(cell.__dict__)
+        cell.set_position(81.5,100)
+        self.assertIsNot(EditObjectCommand(window,cell,old,copy.deepcopy(cell.__dict__)).execute(),False)
+        page=window.doc[0]
+        self.assertTrue(all(drawing['color'] is None for drawing in page.get_drawings()))
+        # The header glyphs still render dark over the green background.
+        pixmap=page.get_pixmap(clip=fitz.Rect(page.search_for('Header')[0]))
+        self.assertLess(min(min(pixmap.pixel(x,y)) for x in range(pixmap.width) for y in range(pixmap.height)),100)
+
+    def original_page(self, build):
+        window=self.window()
+        build(window.doc[0])
+        pdf_handler.save_page_snapshot(window.doc,0,force=True)
+        window.editable_texts=pdf_handler.extract_editable_text(window.doc,0)[0]
+        window.editable_shapes=pdf_handler.extract_editable_shapes(window.doc,0)[0]
+        window.editable_images=pdf_handler.extract_editable_images(window.doc,0)[0]
+        window.editable_strokes=pdf_handler.extract_editable_strokes(window.doc,0)[0]
+        self.cache(window)
+        return window
+
+    def move(self, window, obj, dx, dy):
+        old=copy.deepcopy(obj.__dict__)
+        obj.set_position(obj.bbox[0]+dx,obj.bbox[1]+dy)
+        command=EditObjectCommand(window,obj,old,copy.deepcopy(obj.__dict__))
+        self.assertIsNot(command.execute(),False)
+        return command
+
+    def color_at(self, window, x, y):
+        pixmap=window.doc[0].get_pixmap(dpi=288,clip=fitz.Rect(x-0.125,y-0.125,x+0.125,y+0.125))
+        return pixmap.pixel(0,0)
+
+    def assertColor(self, actual, expected):
+        self.assertLessEqual(max(abs(a-b) for a,b in zip(actual,expected)),3,(actual,expected))
+
+    def test_moving_cell_keeps_neighbours_grid_and_links_in_place(self):
+        green=(0.72,0.87,0.78)
+        def build(page):
+            page.draw_rect(page.rect,color=None,fill=(1,1,1))
+            for rect in ((40,100,80,135),(80,100,400,135),(400,100,450,135)):
+                page.draw_rect(rect,color=None,fill=green)
+            grid=page.new_shape()
+            for y in (100,135,160):
+                grid.draw_line((40,y),(450,y))
+            for x in (40,80,400,450):
+                grid.draw_line((x,100),(x,160))
+            grid.finish(color=(0,0,0),width=0.8)
+            grid.commit()
+            page.insert_link({'kind':fitz.LINK_URI,'from':fitz.Rect(150,110,300,125),'uri':'https://example.org'})
+        window=self.original_page(build)
+        original=sorted(len(d['items']) for d in window.doc[0].get_drawings())
+        cell=next(shape for shape in window.editable_shapes if shape.bbox[0]==80)
+        command=self.move(window,cell,1.5,0)
+        page=window.doc[0]
+        self.assertEqual(sorted(len(d['items']) for d in page.get_drawings()),original)
+        # The grid still covers the neighbouring cells and the link survives.
+        self.assertColor(self.color_at(window,80,120),(0,0,0))
+        self.assertEqual(len(page.get_links()),1)
+        command.undo()
+        self.assertEqual(sorted(len(d['items']) for d in window.doc[0].get_drawings()),original)
+        self.assertEqual(len(window.doc[0].get_links()),1)
+
+    def test_moving_cell_keeps_background_image_and_unrelated_bars(self):
+        def build(page):
+            pixmap=fitz.Pixmap(fitz.csRGB,fitz.IRect(0,0,8,8),False)
+            pixmap.set_rect(pixmap.irect,(250,240,200))
+            page.insert_image(page.rect,pixmap=pixmap)
+            page.draw_line((50,170),(300,170),color=(1,0.9,0.3),width=14)
+            page.insert_text((60,174),'Text on a bar')
+            page.draw_rect((50,50,300,90),color=None,fill=(0.72,0.87,0.78))
+            page.draw_rect((300,150,400,190),color=None,fill=(0.72,0.87,0.78))
+            page.insert_text((60,75),'Header')
+        window=self.original_page(build)
+        cell=next(shape for shape in window.editable_shapes if shape.bbox[1]==50)
+        self.move(window,cell,2,0)
+        self.assertColor(self.color_at(window,150,60),(184,222,199))
+        neighbour=next(shape for shape in window.editable_shapes if shape.bbox[1]==150)
+        self.move(window,neighbour,1.5,0)
+        self.assertColor(self.color_at(window,200,165),(255,230,77))
+        self.assertIn('Text on a bar',window.doc[0].get_text())
+
+    def test_original_rounded_box_and_triangle_keep_their_outline(self):
+        def build(page):
+            shape=page.new_shape()
+            shape.draw_rect(fitz.Rect(50,50,200,120),radius=0.2)
+            shape.finish(fill=(0.6,0.75,0.95),color=None)
+            shape.commit()
+            shape=page.new_shape()
+            shape.draw_polyline([(250,120),(300,50),(350,120)])
+            shape.finish(fill=(0.95,0.6,0.6),color=(0.5,0,0),closePath=True,width=2)
+            shape.commit()
+        window=self.original_page(build)
+        self.assertEqual([shape.shape_type for shape in window.editable_shapes],['path','path'])
+        box,triangle=window.editable_shapes
+        self.move(window,box,0,30)
+        self.move(window,triangle,0,30)
+        white=(255,255,255)
+        self.assertColor(self.color_at(window,51,81),white)
+        self.assertColor(self.color_at(window,262,100),white)
+        self.assertColor(self.color_at(window,300,140),(242,153,153))
+
+    def test_thin_bars_and_flat_rectangles_are_editable_lines(self):
+        green=(0.45,0.67,0.58)
+        def build(page):
+            page.draw_rect((40,100,560,100.75),color=None,fill=green)
+            page.draw_rect((40,150,560,150),color=green,width=0.75)
+            page.draw_rect((300,250,300.75,400),color=None,fill=green)
+        window=self.original_page(build)
+        self.assertEqual(window.editable_shapes,[])
+        self.assertEqual(sorted(tuple(stroke.points) for stroke in window.editable_strokes),
+                         [((40,100.375),(560,100.375)),((40,150),(560,150)),((300.375,250),(300.375,400))])
+        for stroke in list(window.editable_strokes):
+            old=copy.deepcopy(stroke.__dict__)
+            stroke.points=[(x,y+10) for x,y in stroke.points]
+            stroke.recalculate_bbox()
+            self.assertIsNot(EditObjectCommand(window,stroke,old,copy.deepcopy(stroke.__dict__)).execute(),False)
+        rects=sorted(tuple(round(v,2) for v in drawing['rect']) for drawing in window.doc[0].get_drawings())
+        self.assertEqual(rects,[(40,110.38,560,110.38),(40,160,560,160),(300.38,260,300.38,410)])
+        self.assertColor(self.color_at(window,200,110.38),(115,171,148))
+
     def test_page_navigation_keeps_table_objects_and_history(self):
         window=self.window(pages=2)
         objects=self.insert_table(window)

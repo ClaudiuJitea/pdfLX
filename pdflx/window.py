@@ -10,6 +10,10 @@ import cairo
 import threading
 import math
 import re
+
+# Screen pixels the pointer must travel before a press on an object becomes a drag.
+DRAG_THRESHOLD = 5.0
+
 try:
     import pymupdf as fitz
 except ImportError:
@@ -6623,6 +6627,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
         self._form_drag_active=False
         self._form_handle_drag=False
+        self._drag_moved=False
         if self.tool_mode == 'drag':
             self._pan_start = (self.pdf_scroll.get_hadjustment().get_value(),
                                self.pdf_scroll.get_vadjustment().get_value())
@@ -6985,6 +6990,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.pdf_view.queue_draw()
             return
         
+        if (getattr(self, 'table_drag_state', None) is not None or self.dragged_object) \
+                and not self._drag_past_threshold(offset_x, offset_y):
+            return
+
         if getattr(self, 'table_drag_state', None) is not None:
             self._update_table_drag(offset_x, offset_y)
             return
@@ -7054,6 +7063,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.selected_text = None
 
         self.pdf_view.queue_draw()
+
+    def _drag_past_threshold(self, offset_x, offset_y):
+        """A click with a slight hand movement must not move, resize, rotate or snap the object."""
+        if not getattr(self, '_drag_moved', False):
+            if math.hypot(offset_x, offset_y) < DRAG_THRESHOLD:
+                return False
+            self._drag_moved = True
+        return True
 
     def _handle_rotate_update(self, gesture, offset_x, offset_y):
         """Handle dynamic rotation update while dragging the stalk rotation handle."""
@@ -7390,7 +7407,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             del self.rotate_pointer_start_angle
         
         rot_changed = (old_properties.get('rotation', 0.0) != new_properties.get('rotation', 0.0))
-        if abs(offset_x) < 1 and abs(offset_y) < 1 and not rot_changed:
+        if not getattr(self, '_drag_moved', False) or (
+                old_properties.get('bbox') == new_properties.get('bbox') and not rot_changed):
             self.pdf_view.queue_draw()
             return
 

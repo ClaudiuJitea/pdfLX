@@ -68,7 +68,7 @@ def alpha_resource(doc, page, value):
     return f'/{name} gs\n'
 
 
-def insert_image(doc, page, obj):
+def insert_image(doc, page, obj, overlay=True):
     s = validate(obj)
     rect = fitz.Rect(obj.bbox)
     rotation = page.rotation
@@ -83,8 +83,8 @@ def insert_image(doc, page, obj):
                          rect.y0-top*rect.height/(1-top-bottom),
                          rect.x1+right*rect.width/(1-left-right),
                          rect.y1+bottom*rect.height/(1-top-bottom))
-        page.insert_image(full, stream=obj.image_bytes, keep_proportion=False)
-        content = page.get_contents()[-1]
+        page.insert_image(full, stream=obj.image_bytes, keep_proportion=False, overlay=overlay)
+        content = page.get_contents()[-1 if overlay else 0]
         original = doc.xref_stream(content)
         # All decoration and clipping coordinates below use the same y-down
         # page coordinates as the model. Source pixels and alpha stay intact.

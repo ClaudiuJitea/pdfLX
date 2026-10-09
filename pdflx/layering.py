@@ -3,7 +3,8 @@
 Objects without an explicit ``z`` keep the historical order: table cells, then
 text and images, then shapes, then pen strokes. Original page content that was
 never edited lives in the page snapshot underneath every canvas object, so it is
-redrawn ("lifted") when a shape must go behind it.
+redrawn ("lifted") when a shape must go behind it. Edited original shapes without
+an explicit ``z`` are drawn beneath the snapshot instead, where they came from.
 """
 import pymupdf as fitz
 
@@ -19,6 +20,14 @@ def layer_key(obj):
     if isinstance(obj, EditableShape) and getattr(obj, 'table_id', None):
         return 0.0
     return DEFAULT_RANK.get(type(obj), 10.0)
+
+
+def is_underlay(obj):
+    """Original page shapes (cell backgrounds, panels) and the images beneath them
+    stay beneath the untouched page content."""
+    original = (getattr(obj, 'from_page', False) if isinstance(obj, EditableShape)
+                else isinstance(obj, EditableImage) and getattr(obj, 'underlay', False))
+    return original and not getattr(obj, 'is_new', False) and getattr(obj, 'z', None) is None
 
 
 def draw_order(objects):

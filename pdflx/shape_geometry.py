@@ -6,7 +6,7 @@ segment is ('M', p), ('L', p) or ('C', c1, c2, p) with points as (x, y) tuples.
 import math
 
 KAPPA = 0.5522847498307936
-CLOSED_KINDS = ('rectangle', 'ellipse', 'polygon', 'right_triangle', 'star', 'arrow', 'callout')
+CLOSED_KINDS = ('rectangle', 'ellipse', 'polygon', 'right_triangle', 'star', 'arrow', 'callout', 'path')
 OPEN_KINDS = ('checkmark', 'cross')
 DASHES = ('solid', 'dashed', 'dotted')
 
@@ -97,11 +97,57 @@ def star_points(points, inner):
     return result
 
 
+def from_items(items, close=False):
+    """Subpaths from PyMuPDF get_drawings() items ('l', 'c', 're', 'qu')."""
+    paths, segments, last = [], [], None
+
+    def flush():
+        if len(segments) > 1:
+            closed = close or segments[-1][-1] == segments[0][1]
+            if closed and segments[-1][-1] != segments[0][1]:
+                segments.append(('L', segments[0][1]))
+            paths.append((closed, list(segments)))
+        segments.clear()
+
+    for item in items:
+        op = item[0]
+        if op in ('re', 'qu'):
+            flush()
+            quad = item[1].quad if op == 're' else item[1]
+            corners = [tuple(quad.ul), tuple(quad.ur), tuple(quad.lr), tuple(quad.ll)]
+            paths.append((True, [('M', corners[0])] + [('L', p) for p in corners[1:]]))
+            last = None
+            continue
+        start = tuple(item[1])
+        if last is None or max(abs(start[0] - last[0]), abs(start[1] - last[1])) > 1e-3:
+            flush()
+            segments.append(('M', start))
+        if op == 'l':
+            last = tuple(item[2])
+            segments.append(('L', last))
+        elif op == 'c':
+            last = tuple(item[4])
+            segments.append(('C', tuple(item[2]), tuple(item[3]), last))
+    flush()
+    return paths
+
+
+def _scaled(paths, source, x0, y0, x1, y1):
+    """Map a stored outline from the box it was recorded in onto the current box."""
+    sx0, sy0, sx1, sy1 = source
+    fx = (x1 - x0) / max(sx1 - sx0, 1e-9)
+    fy = (y1 - y0) / max(sy1 - sy0, 1e-9)
+    return transform(paths, lambda p: (x0 + (p[0] - sx0) * fx, y0 + (p[1] - sy0) * fy))
+
+
 def outline(shape, bbox=None):
     """Subpaths for a shape (an EditableShape or anything with the same attributes)."""
     x0, y0, x1, y1 = _bbox(bbox or shape.bbox)
     w, h = max(x1 - x0, 1e-6), max(y1 - y0, 1e-6)
     kind = shape.shape_type
+    if kind == 'path' and getattr(shape, 'path', None):
+        # An original PDF outline (rounded box, triangle, logo part) keeps its exact form.
+        return _scaled(shape.path, shape.path_bbox, x0, y0, x1, y1)
     radius = float(getattr(shape, 'corner_radius', 0) or 0)
     if kind == 'rectangle':
         return _rounded(x0, y0, x1, y1, radius) if radius > 0 else _polyline([(x0, y0), (x1, y0), (x1, y1), (x0, y1)])

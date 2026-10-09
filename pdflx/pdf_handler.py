@@ -4,6 +4,7 @@ except ImportError:
     import fitz
 import numpy as np
 import cairo
+from .graphics_erase import drawing_key
 import io
 import os
 from pathlib import Path
@@ -1109,6 +1110,51 @@ def delete_stroke_from_page(doc, stroke_obj: EditableStroke):
 
 
 
+def _bezier_point(points, t):
+    p0, p1, p2, p3 = (fitz.Point(p) for p in points)
+    u = 1 - t
+    return p0 * (u ** 3) + p1 * (3 * u * u * t) + p2 * (3 * u * t * t) + p3 * (t ** 3)
+
+
+def _line_cap(drawing):
+    cap = drawing.get('lineCap') or (0,)
+    return int(cap[0] if isinstance(cap, (tuple, list)) else cap)
+
+
+def _thin_bar(drawing):
+    """A rectangle thinner than 2pt is a rule or separator line: edit it as a line."""
+    items = drawing.get('items') or ()
+    if len(items) != 1 or items[0][0] not in ('re', 'qu'):
+        return None
+    rect = fitz.Rect(drawing['rect'])
+    fill, color = drawing.get('fill'), drawing.get('color')
+    thickness = min(rect.width, rect.height)
+    if thickness >= 2 or max(rect.width, rect.height) < 4:
+        return None
+    if fill is not None:
+        width, paint, opacity = thickness, fill, drawing.get('fill_opacity')
+    elif color is not None:
+        width, paint, opacity = thickness + float(drawing.get('width') or 1.0), color, drawing.get('stroke_opacity')
+    else:
+        return None
+    if width <= 0:
+        return None
+    if rect.width >= rect.height:
+        cy = (rect.y0 + rect.y1) / 2.0
+        points = [(rect.x0, cy), (rect.x1, cy)]
+    else:
+        cx = (rect.x0 + rect.x1) / 2.0
+        points = [(cx, rect.y0), (cx, rect.y1)]
+    stroke = EditableStroke(points=points, stroke_color=paint, stroke_width=width,
+                            opacity=1.0 if opacity is None else float(opacity), tool_type='line', is_new=False)
+    stroke.is_baked = True
+    stroke.source_key = drawing_key(drawing)
+    stroke.source_items = (0,)
+    # A filled bar ends exactly at its edges; an outlined one keeps its own caps.
+    stroke.cap = 0 if fill is not None else _line_cap(drawing)
+    return stroke
+
+
 def extract_editable_shapes(doc, page_index):
     """Extract editable geometric shapes (rectangles, ellipses)."""
     editable_shapes = []
@@ -1133,7 +1179,11 @@ def extract_editable_shapes(doc, page_index):
                 is_transparent = (raw_fill is None)
                 fill_color = raw_fill if raw_fill else (1.0, 1.0, 1.0)
                 stroke_color = raw_stroke if raw_stroke else (0.0, 0.0, 0.0)
-                stroke_width = float(raw_width) if raw_width else 1.0
+                # Fill-only paths (table cell backgrounds) have no outline to redraw.
+                if raw_stroke is None or drawing.get('type') == 'f':
+                    stroke_width = 0.0
+                else:
+                    stroke_width = float(raw_width) if raw_width else 1.0
 
                 # Check if rectangle:
                 if len(items) == 1 and items[0][0] == 're':
@@ -1151,6 +1201,8 @@ def extract_editable_shapes(doc, page_index):
                             rotation=0.0
                         )
                         shape_obj.is_baked = True
+                        shape_obj.from_page = True
+                        shape_obj.source_key = drawing_key(drawing)
                         editable_shapes.append(shape_obj)
                     continue
 
@@ -1172,17 +1224,20 @@ def extract_editable_shapes(doc, page_index):
                                 rotation=0.0
                             )
                             shape_obj.is_baked = True
+                            shape_obj.from_page = True
+                            shape_obj.source_key = drawing_key(drawing)
                             editable_shapes.append(shape_obj)
                     continue
 
-                # If drawing is filled, treat as rectangle shape by bounding box
+                # Any other filled outline (rounded box, triangle, logo part) keeps its exact path.
                 if raw_fill is not None:
                     rect = drawing.get('rect')
                     if rect:
                         r = fitz.Rect(rect)
                         if r.width >= 2 and r.height >= 2:
+                            from .shape_geometry import from_items
                             shape_obj = EditableShape(
-                                shape_type=EditableShape.SHAPE_RECTANGLE,
+                                shape_type='path',
                                 bbox=(r.x0, r.y0, r.x1, r.y1),
                                 fill_color=fill_color,
                                 stroke_color=stroke_color,
@@ -1192,7 +1247,12 @@ def extract_editable_shapes(doc, page_index):
                                 is_transparent=False,
                                 rotation=0.0
                             )
+                            shape_obj.path = from_items(items, close=raw_stroke is None or bool(drawing.get('closePath')))
+                            shape_obj.path_bbox = (r.x0, r.y0, r.x1, r.y1)
+                            shape_obj.even_odd = bool(drawing.get('even_odd'))
                             shape_obj.is_baked = True
+                            shape_obj.from_page = True
+                            shape_obj.source_key = drawing_key(drawing)
                             editable_shapes.append(shape_obj)
             except Exception as item_err:
                 print(f"Warning: skipping shape drawing item: {item_err}")
@@ -1224,6 +1284,11 @@ def extract_editable_strokes(doc, page_index):
                 if not items:
                     continue
 
+                bar = _thin_bar(drawing)
+                if bar is not None:
+                    editable_strokes.append(bar)
+                    bar.page_number = page_index
+                    continue
                 # Skip pure shapes (handled by extract_editable_shapes)
                 if len(items) == 1 and items[0][0] == 're':
                     continue
@@ -1238,27 +1303,25 @@ def extract_editable_strokes(doc, page_index):
 
                 subpaths = []
                 current_subpath = []
-                for it in items:
+                current_items = []
+                for index, it in enumerate(items):
                     if it[0] == 'l':
-                        p1, p2 = (it[1].x, it[1].y), (it[2].x, it[2].y)
-                        if current_subpath and current_subpath[-1] != p1:
-                            subpaths.append(current_subpath)
-                            current_subpath = [p1, p2]
-                        else:
-                            if not current_subpath:
-                                current_subpath.append(p1)
-                            current_subpath.append(p2)
+                        p1, ends = (it[1].x, it[1].y), [(it[2].x, it[2].y)]
                     elif it[0] == 'c':
-                        p1, p4 = (it[1].x, it[1].y), (it[4].x, it[4].y)
-                        if current_subpath and current_subpath[-1] != p1:
-                            subpaths.append(current_subpath)
-                            current_subpath = [p1, p4]
-                        else:
-                            if not current_subpath:
-                                current_subpath.append(p1)
-                            current_subpath.append(p4)
+                        # Sample the curve so arcs and signatures keep their shape.
+                        p1 = (it[1].x, it[1].y)
+                        ends = [tuple(_bezier_point(it[1:5], step / 8.0)) for step in range(1, 9)]
+                    else:
+                        continue
+                    if current_subpath and current_subpath[-1] != p1:
+                        subpaths.append((current_subpath, current_items))
+                        current_subpath, current_items = [p1], []
+                    elif not current_subpath:
+                        current_subpath.append(p1)
+                    current_subpath.extend(ends)
+                    current_items.append(index)
                 if current_subpath:
-                    subpaths.append(current_subpath)
+                    subpaths.append((current_subpath, current_items))
 
                 stroke_width = float(raw_width) if raw_width else 2.0
                 is_hl = (stroke_width >= 8.0) or (raw_opacity is not None and raw_opacity < 0.9)
@@ -1266,7 +1329,7 @@ def extract_editable_strokes(doc, page_index):
                 opacity = float(raw_opacity) if raw_opacity is not None else (0.35 if is_hl else 1.0)
                 stroke_color = raw_stroke if raw_stroke else (0.0, 0.0, 0.0)
 
-                for sp in subpaths:
+                for sp, sp_items in subpaths:
                     if sp and len(sp) >= 1:
                         stroke_obj = EditableStroke(
                             points=sp,
@@ -1279,6 +1342,9 @@ def extract_editable_strokes(doc, page_index):
                             rotation=0.0
                         )
                         stroke_obj.is_baked = True
+                        stroke_obj.source_key = drawing_key(drawing)
+                        stroke_obj.source_items = tuple(sp_items)
+                        stroke_obj.cap = _line_cap(drawing)
                         editable_strokes.append(stroke_obj)
             except Exception as item_err:
                 print(f"Warning: skipping stroke drawing item: {item_err}")
@@ -1369,7 +1435,7 @@ def release_page_snapshots(doc):
         if k in _page_original_links:
             del _page_original_links[k]
 
-def _apply_single_object_to_page(doc, page, obj):
+def _apply_single_object_to_page(doc, page, obj, overlay=True):
     """Render a single object (text, image, shape, stroke) onto a PDF page with transforms."""
     rot = getattr(obj, "rotation", 0.0) % 360.0
 
@@ -1532,7 +1598,7 @@ def _apply_single_object_to_page(doc, page, obj):
                         
     elif isinstance(obj, EditableImage):
         from .image_editing import insert_image
-        insert_image(doc, page, obj)
+        insert_image(doc, page, obj, overlay=overlay)
     elif isinstance(obj, EditableShape):
         from . import shape_geometry
         rect = fitz.Rect(obj.bbox)
@@ -1563,11 +1629,14 @@ def _apply_single_object_to_page(doc, page, obj):
                 else:
                     shape.draw_bezier(last, segment[1], segment[2], segment[3])
                     last = fitz.Point(segment[3])
+        is_path = obj.shape_type == 'path'
         shape.finish(color=stroke, fill=fill if closed else None, width=obj.stroke_width,
                      dashes=f'[{pattern[0]:g} {pattern[1]:g}] 0' if pattern and stroke else None,
                      lineCap=1 if round_ends else 0, lineJoin=1 if not closed else 0,
-                     closePath=closed, fill_opacity=opacity, stroke_opacity=opacity)
-        shape.commit()
+                     # Original outlines carry their own closing segments.
+                     closePath=bool(paths and paths[-1][0]) if is_path else closed, even_odd=is_path and getattr(obj, 'even_odd', False),
+                     fill_opacity=opacity, stroke_opacity=opacity)
+        shape.commit(overlay)
     elif isinstance(obj, EditableStroke):
         if obj.points and len(obj.points) >= 2:
             shape = page.new_shape()
@@ -1588,7 +1657,8 @@ def _apply_single_object_to_page(doc, page, obj):
             is_line = getattr(obj, 'tool_type', None) == 'line'
             is_hl = getattr(obj, 'tool_type', None) in (EditableStroke.TOOL_HIGHLIGHTER, "highlighter") or (
                 obj.stroke_width >= 8.0 and not is_line)
-            cap = 2 if is_hl else 1
+            # Lines read from the PDF keep their own end style (thin bars are butt-ended).
+            cap = getattr(obj, 'cap', 2 if is_hl else 1)
             join = 2 if is_hl else 1
             from . import shape_geometry
             pattern = shape_geometry.dash_pattern(getattr(obj, 'dash', 'solid'), obj.stroke_width)
@@ -1641,14 +1711,22 @@ def rebuild_page(doc, page_num: int, all_texts, all_shapes, all_images,
         if not restore_page_from_snapshot(doc, page_num):
             raise ValueError("The original page snapshot is unavailable.")
         page = doc.load_page(page_num)
-        from .layering import draw_order
+        from .layering import draw_order, is_underlay
         # Table backgrounds sit below their text; explicit z (Bring to Front / Send to Back) wins.
-        for obj in draw_order(list(all_texts) + list(all_images) + list(all_shapes) + list(all_strokes or [])):
-            if obj.page_number == page_num and obj is not exclude_obj:
-                if getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False):
-                    success, error = _apply_single_object_to_page(doc, page, obj)
-                    if not success:
-                        raise ValueError(error or "Could not render an object.")
+        managed = [obj for obj in draw_order(list(all_texts) + list(all_images) + list(all_shapes) + list(all_strokes or []))
+                   if obj.page_number == page_num and obj is not exclude_obj
+                   and (getattr(obj, 'is_new', False) or getattr(obj, '_ghost_redacted', False))]
+        underlay = [obj for obj in managed if is_underlay(obj)]
+        # Each underlay is prepended to the content, so the topmost goes in first.
+        for obj in reversed(underlay):
+            success, error = _apply_single_object_to_page(doc, page, obj, overlay=False)
+            if not success:
+                raise ValueError(error or "Could not render an object.")
+        for obj in managed:
+            if all(obj is not item for item in underlay):
+                success, error = _apply_single_object_to_page(doc, page, obj)
+                if not success:
+                    raise ValueError(error or "Could not render an object.")
         invalidate_page_cache(doc, page_num)
         return True, None
     except Exception as error:
@@ -1661,8 +1739,9 @@ def apply_object_edit(doc, obj):
     if not doc or not hasattr(obj, 'page_number') or obj.page_number is None:
         return False, "Invalid object or page number."
     try:
+        from .layering import is_underlay
         page = doc.load_page(obj.page_number)
-        res, err = _apply_single_object_to_page(doc, page, obj)
+        res, err = _apply_single_object_to_page(doc, page, obj, overlay=not is_underlay(obj))
         invalidate_page_cache(doc, obj.page_number)
         return res, err
     except Exception as e:

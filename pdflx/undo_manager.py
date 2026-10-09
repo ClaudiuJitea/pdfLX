@@ -6,7 +6,7 @@ try:
     import pymupdf as fitz
 except ImportError:
     import fitz
-from . import pdf_handler
+from . import pdf_handler, graphics_erase
 from .models import EditableText, EditableShape, EditableStroke, EditableImage
 from .i18n import _
 import logging
@@ -122,11 +122,13 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
                     else:
                         applied_rects.append(st_rect)
 
-        # Apply redaction ONLY for target_object
-        if mat:
-            page.add_redact_annot(redact_rect.quad * mat)
-        else:
-            page.add_redact_annot(redact_rect)
+        backdrops = []
+        if not isinstance(target_object, (EditableShape, EditableStroke)):
+            # Apply redaction ONLY for target_object
+            if mat:
+                page.add_redact_annot(redact_rect.quad * mat)
+            else:
+                page.add_redact_annot(redact_rect)
 
         # Execute redactions strictly isolated by object type
         if isinstance(target_object, EditableText):
@@ -135,13 +137,9 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
 
             # If underline strip exists, redact only vector graphics for the strip, NEVER text
             if strip_rects:
-                for s_rect in strip_rects:
-                    if mat:
-                        page.add_redact_annot(s_rect.quad * mat)
-                    else:
-                        page.add_redact_annot(s_rect)
                 try:
-                    page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
+                    graphics_erase.redact_strips(page, [(s_rect.quad * mat).rect if mat else s_rect
+                                                        for s_rect in strip_rects])
                 except Exception as error:
                     # A failed erase leaves the old appearance under the edited object.
                     logger.warning("Could not erase previous object appearance on page %s: %s", page_num, error)
@@ -171,30 +169,34 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
                                     other._ghost_redacted = True
 
         elif isinstance(target_object, (EditableShape, EditableStroke)):
-            # Only redact vector graphics, NEVER redact text or images (text=1 preserves text!)
-            try:
-                page.apply_redactions(images=fitz.PDF_REDACT_IMAGE_NONE, graphics=2, text=1)
-            except Exception:
-                page.apply_redactions()
+            # Only this drawing goes; paths it merely touches are given back unchanged.
+            candidates = [shape for shape in getattr(window, 'editable_shapes', [])
+                          if shape is not target_object and getattr(shape, 'page_number', None) == page_num
+                          and getattr(shape, 'source_key', None) is not None
+                          and not getattr(shape, 'is_new', False) and not getattr(shape, '_ghost_redacted', False)]
+            claimed = []
 
-            # Check ONLY other shapes and strokes for vector clipping
-            other_graphics = [s for s in getattr(window, 'editable_shapes', []) if s is not target_object and getattr(s, 'page_number', None) == page_num]
-            other_graphics += [st for st in getattr(window, 'editable_strokes', []) if st is not target_object and getattr(st, 'page_number', None) == page_num]
-            for other in other_graphics:
-                if hasattr(other, 'bbox') and other.bbox:
-                    ox0, oy0, ox1, oy1 = other.bbox
-                    opad = max(getattr(other, 'stroke_width', 2.0) / 2.0, 1.0)
-                    other_rect = fitz.Rect(ox0 - opad, oy0 - opad, ox1 + opad, oy1 + opad)
-                    orot = getattr(other, 'rotation', 0.0)
-                    if orot != 0.0:
-                        ocx = (ox0 + ox1) / 2.0
-                        ocy = (oy0 + oy1) / 2.0
-                        omat = pdf_handler.get_rotation_matrix(ocx, ocy, orot)
-                        other_rect = (other_rect.quad * omat).rect
-                    for ar in applied_rects:
-                        if ar.intersects(other_rect):
-                            other._ghost_redacted = True
-                            break
+            def adopt(drawing):
+                key = graphics_erase.drawing_key(drawing)
+                for shape in candidates:
+                    if all(shape is not other for other in claimed) and tuple(
+                            tuple(k) if isinstance(k, list) else k for k in shape.source_key) == key:
+                        claimed.append(shape)
+                        return True
+                return False
+
+            is_shape = isinstance(target_object, EditableShape)
+            removed, adopted, log = graphics_erase.erase(
+                page, key=getattr(target_object, 'source_key', None),
+                rect=orig_bbox if is_shape and not rot else None,
+                fallback=applied_rects[0], only_items=getattr(target_object, 'source_items', None), adopt=adopt)
+            for shape in claimed:
+                shape._ghost_redacted = True
+                shape.is_baked = True
+            # Underlaid shapes are drawn beneath the page: images under them must move down too.
+            from .layering import is_underlay
+            for drawing in (removed if is_underlay(target_object) else []) + adopted:
+                backdrops += graphics_erase.backdrop_images(log, drawing)
 
         elif isinstance(target_object, EditableImage):
             # Only redact image, NEVER redact text or graphics
@@ -207,11 +209,13 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
                         for ar in applied_rects:
                             if ar.intersects(other_rect):
                                 other._ghost_redacted = True
+                                if getattr(target_object, 'underlay', False):
+                                    other.underlay = True
                                 break
 
-        # Clean old links
+        # Clean old links (they belong to text and images, never to shapes beneath them)
         try:
-            for link in list(page.get_links()):
+            for link in (list(page.get_links()) if not isinstance(target_object, (EditableShape, EditableStroke)) else []):
                 link_rect = fitz.Rect(link.get('from', (0, 0, 0, 0)))
                 for ar in applied_rects:
                     if link_rect.intersects(ar):
@@ -220,12 +224,22 @@ def _perform_ghost_erasure(window, target_object, page_num, properties_to_clear=
         except Exception as link_err:
             print(f"Warning: could not delete old link: {link_err}")
 
+        # Release the page so links put back during the erase are visible to the snapshot.
+        page = None
         window.doc.load_page(page_num)
         pdf_handler.save_page_snapshot(window.doc, page_num, force=True)
         pdf_handler.invalidate_page_cache(window.doc, page_num)
         target_object._ghost_redacted = True
     except Exception as e:
         raise ValueError(f"Could not erase the original object on page {page_num+1}: {e}") from e
+    for image in getattr(window, 'editable_images', []):
+        if getattr(image, 'page_number', None) != page_num or getattr(image, 'is_new', False) \
+                or getattr(image, '_ghost_redacted', False):
+            continue
+        box = fitz.Rect(image.bbox)
+        if any(max(abs(a - b) for a, b in zip(box, rect)) <= 1.0 for rect in backdrops):
+            image.underlay = True
+            _perform_ghost_erasure(window, image, page_num)
 
 class Command:
     """Base class for undoable/redoable actions."""
