@@ -85,13 +85,21 @@ class TableStyleTests(unittest.TestCase):
         window, table, cells = self.window()
         original=[copy.deepcopy(obj.__dict__) for obj in table.objects]
         before=window.doc[0].get_pixmap().samples
-        for options in ({'font_size':24},{'border_width':float('nan')},{'text_color':(2,0,0)}):
+        for options in ({'font_size':30},{'border_width':float('nan')},{'text_color':(2,0,0)}):
             style=dict(PRESETS['blue'],font_size=10,border_width=.75)
             style.update(options)
             with self.assertRaises(ValueError):
                 style_states(table,window.doc[0],style)
             self.assertEqual([obj.__dict__ for obj in table.objects],original)
             self.assertEqual(window.doc[0].get_pixmap().samples,before)
+        # Oversized text shrinks to fit its cell instead of blocking the style.
+        fitted=[]
+        states=style_states(table,window.doc[0],dict(PRESETS['blue'],font_size=24,border_width=.75),fitted)
+        self.assertTrue(fitted)
+        sizes=[state['font_size'] for obj,state in zip(table.objects,states) if isinstance(obj,EditableText)]
+        self.assertTrue(all(4<=size<24 for size in sizes))
+        self.assertEqual([obj.__dict__ for obj in table.objects],original)
+        self.assertEqual(window.doc[0].get_pixmap().samples,before)
 
     def test_legacy_table_without_cell_indices_can_be_styled(self):
         window, table, cells = self.window(90)

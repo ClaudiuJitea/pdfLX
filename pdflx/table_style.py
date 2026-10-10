@@ -27,8 +27,16 @@ def current_style(table):
     return style
 
 
-def style_states(table, page, style):
-    """Return all new object states; validate wrapping before a PDF is modified."""
+MIN_FIT_SIZE = 4.0
+
+
+def style_states(table, page, style, fitted=None):
+    """Return all new object states; validate wrapping before a PDF is modified.
+
+    Text that does not fit its cell at ``style['font_size']`` gets the largest
+    smaller size that fits (down to MIN_FIT_SIZE); the shrunk objects are
+    appended to ``fitted`` when a list is given.
+    """
     for key in ('header_fill','body_fill','alternate_fill','border_color','text_color','header_text'):
         if len(style[key]) != 3 or not all(math.isfinite(v) and 0 <= v <= 1 for v in style[key]):
             raise ValueError('Choose valid table colors.')
@@ -74,10 +82,20 @@ def style_states(table, page, style):
             font = fitz.Font(**args)
             value = obj.table_source_text if obj.text == getattr(obj, 'table_wrapped_text', None) else obj.text
             padding = min(6, bounds.width/8, bounds.height/3)
-            lines = _wrap(value, font, clone.font_size, bounds.width-2*padding)
-            height = (len(lines)-1)*clone.font_size*1.2+(font.ascender-font.descender)*clone.font_size
-            if height > bounds.height-2*padding+.01:
-                raise ValueError('The text does not fit at this font size. Choose a smaller size or enlarge the table first.')
+
+            def layout(size):
+                lines = _wrap(value, font, size, bounds.width-2*padding)
+                height = (len(lines)-1)*size*1.2+(font.ascender-font.descender)*size
+                return lines, height <= bounds.height-2*padding+.01
+            lines, fits = layout(clone.font_size)
+            if not fits:
+                size = clone.font_size
+                while not fits and size > MIN_FIT_SIZE:
+                    size = max(MIN_FIT_SIZE, size-0.5)
+                    lines, fits = layout(size)
+                clone.font_size = size
+                if fitted is not None:
+                    fitted.append(obj)
             inner = bounds+(padding,padding,-padding,-padding)
             native_center = (inner.tl+inner.br)/2*page.derotation_matrix
             rect = fitz.Rect(native_center.x-inner.width/2, native_center.y-inner.height/2,

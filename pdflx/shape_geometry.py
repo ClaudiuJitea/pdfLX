@@ -271,10 +271,19 @@ def stroke_ends(points, width, arrow_start=False, arrow_end=False):
         length = math.hypot(dx, dy) or 1.0
         step = min(size * 0.8, length * 0.5)
         return (tip[0] + dx / length * step, tip[1] + dy / length * step)
+    def tail(tip, path):
+        # Freehand strokes end in tiny or repeated segments; aim the head along
+        # the last arrow-length of the path instead of the final segment.
+        for point in path:
+            if math.hypot(point[0] - tip[0], point[1] - tip[1]) >= size:
+                return point
+        return next((point for point in reversed(path) if point != tip), path[-1])
     if arrow_end:
-        heads.append(arrowhead(points[-1], points[-2], width))
-        points[-1] = pull(points[-1], points[-2])
+        back = tail(points[-1], points[-2::-1])
+        heads.append(arrowhead(points[-1], back, width))
+        points[-1] = pull(points[-1], back)
     if arrow_start:
-        heads.append(arrowhead(points[0], points[1], width))
-        points[0] = pull(points[0], points[1])
+        ahead = tail(points[0], points[1:])
+        heads.append(arrowhead(points[0], ahead, width))
+        points[0] = pull(points[0], ahead)
     return points, heads

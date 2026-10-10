@@ -335,8 +335,19 @@ def place_stamp(doc,page_number,point,stamp='Approved',width=160,author='',style
             appearance=b'\n'.join(doc.xref_stream(ref) for ref in imported.get_contents())
             doc.delete_page(temporary)
         ap=doc.get_new_xref()
-        doc.update_object(ap,f'<< /Type /XObject /Subtype /Form /BBox [0 0 {width} {height}] /Matrix {appearance_matrix} /Resources {resources} >>')
-        doc.update_stream(ap,appearance)
+        if opacity<1:
+            # Viewers paint appearance streams as they are and ignore the
+            # annotation's /CA, so the transparency lives in the appearance.
+            body=doc.get_new_xref()
+            doc.update_object(body,f'<< /Type /XObject /Subtype /Form /BBox [0 0 {width} {height}] /Resources {resources} >>')
+            doc.update_stream(body,appearance)
+            doc.update_object(ap,f'<< /Type /XObject /Subtype /Form /BBox [0 0 {width} {height}] /Matrix {appearance_matrix} '
+                                 f'/Resources << /ExtGState << /Fade << /CA {opacity:g} /ca {opacity:g} >> >> '
+                                 f'/XObject << /Body {body} 0 R >> >> >>')
+            doc.update_stream(ap,b'q /Fade gs /Body Do Q')
+        else:
+            doc.update_object(ap,f'<< /Type /XObject /Subtype /Form /BBox [0 0 {width} {height}] /Matrix {appearance_matrix} /Resources {resources} >>')
+            doc.update_stream(ap,appearance)
         doc.xref_set_key(xref,'AP',f'<< /N {ap} 0 R >>')
         import json
         doc.xref_set_key(xref,'PdfLXStampStyle',fitz.get_pdf_str(json.dumps(dict(style,stamp=stamp))))

@@ -2,7 +2,7 @@
 import math
 import pymupdf as fitz
 
-SHAPES=('rectangle','rounded','oval','circle','seal','badge','ribbon')
+SHAPES=('rectangle','rounded','oval','circle','seal','badge','ribbon','hexagon','burst','tag','ticket')
 
 
 BORDERS=('None','Solid','Double','Dashed')
@@ -11,7 +11,8 @@ BORDERS=('None','Solid','Double','Dashed')
 def dimensions(shape,width,fontsize,page_height,details=False):
     if shape in ('circle','seal'):
         return min(width,page_height),min(width,page_height)
-    ratio={'oval':0.48,'badge':0.8,'ribbon':0.48}.get(shape,1/3.8)
+    ratio={'oval':0.48,'badge':0.8,'ribbon':0.48,'hexagon':0.42,'burst':0.62,'tag':0.36,
+           'ticket':0.34}.get(shape,1/3.8)
     minimum=fontsize*1.5+12
     if details:
         # Room for the smaller details line under the main text.
@@ -38,6 +39,15 @@ def text_region(shape,width,height):
         return fitz.Rect(width*0.13,height*0.15,width*0.87,height*0.62)
     if shape=='ribbon':
         return fitz.Rect(width*0.21,height*0.25,width*0.79,height*0.75)
+    if shape=='hexagon':
+        return fitz.Rect(width*0.15,height*0.17,width*0.85,height*0.83)
+    if shape=='burst':
+        return fitz.Rect(width*0.2,height*0.27,width*0.8,height*0.73)
+    if shape=='tag':
+        # Leave room for the pointed end and its eyelet.
+        return fitz.Rect(width*0.24,height*0.16,width*0.94,height*0.84)
+    if shape=='ticket':
+        return fitz.Rect(width*0.13,height*0.16,width*0.87,height*0.84)
     padding=min(8,width*0.15,height*0.2)
     return fitz.Rect(padding,padding,width-padding,height-padding)
 
@@ -75,6 +85,42 @@ def _outline(path,shape,width,height,inset):
         points=[(x0+w*.08,y0),(x1-w*.08,y0),(x1,y0+h*.53),
                 (x0+w*.8,y0+h*.8),(x0+w*.5,y1),(x0+w*.2,y0+h*.8),
                 (x0,y0+h*.53)]
+        path.draw_polyline(points+[points[0]])
+    elif shape=='hexagon':
+        x0,y0,x1,y1=rect
+        w,h=rect.width,rect.height
+        cut=min(w*.12,h*.5)
+        points=[(x0+cut,y0),(x1-cut,y0),(x1,y0+h/2),(x1-cut,y1),(x0+cut,y1),(x0,y0+h/2)]
+        path.draw_polyline(points+[points[0]])
+    elif shape=='burst':
+        # A starburst: an ellipse with 28 short rays.
+        cx,cy=(rect.x0+rect.x1)/2,(rect.y0+rect.y1)/2
+        rx,ry=rect.width/2,rect.height/2
+        points=[]
+        for n in range(56):
+            angle=math.tau*n/56-math.pi/2
+            scale=1 if n%2==0 else 0.86
+            points.append((cx+rx*scale*math.cos(angle),cy+ry*scale*math.sin(angle)))
+        path.draw_polyline(points+[points[0]])
+    elif shape=='tag':
+        x0,y0,x1,y1=rect
+        w,h=rect.width,rect.height
+        point=min(w*.16,h*.6)
+        r=min(h*.08,4)
+        points=[(x0+point,y0),(x1-r,y0),(x1,y0+r),(x1,y1-r),(x1-r,y1),(x0+point,y1),(x0,y0+h/2)]
+        path.draw_polyline(points+[points[0]])
+        # Eyelet near the point.
+        path.draw_circle((x0+point*.72,y0+h/2),max(1.2,min(h*.09,point*.25)))
+    elif shape=='ticket':
+        # Admission-ticket outline with half-round notches on both sides.
+        x0,y0,x1,y1=rect
+        h=rect.height
+        r=min(h*.16,rect.width*.08)
+        mid=y0+h/2
+        steps=10
+        right=[(x1-r*math.sin(math.pi*i/steps),mid-r*math.cos(math.pi*i/steps)) for i in range(steps+1)]
+        left=[(x0+r*math.sin(math.pi*i/steps),mid+r*math.cos(math.pi*i/steps)) for i in range(steps+1)]
+        points=[(x0,y0),(x1,y0)]+right+[(x1,y1),(x0,y1)]+left
         path.draw_polyline(points+[points[0]])
     else:
         x0,y0,x1,y1=rect

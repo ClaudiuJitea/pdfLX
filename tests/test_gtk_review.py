@@ -66,6 +66,27 @@ class GtkReviewTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
         self.assertIn('open on click passed',result.stdout)
 
+    def test_large_table_drag_and_resize(self):
+        root=Path(__file__).resolve().parents[1]
+        result=subprocess.run([sys.executable,str(root/'tests/ui_table_drag_smoke.py')],
+                              cwd=root,env=_environment(root),capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
+        self.assertIn('frame drawing passed',result.stdout)
+
+    def test_line_style_buttons_replace_nested_dropdowns(self):
+        root=Path(__file__).resolve().parents[1]
+        result=subprocess.run([sys.executable,str(root/'tests/ui_line_style_smoke.py')],
+                              cwd=root,env=_environment(root),capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
+        self.assertIn('without nested drop-downs passed',result.stdout)
+
+    def test_form_panel_generic_button_actions(self):
+        root=Path(__file__).resolve().parents[1]
+        result=subprocess.run([sys.executable,str(root/'tests/ui_form_buttons_smoke.py')],
+                              cwd=root,env=_environment(root),capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
+        self.assertIn('each action passed',result.stdout)
+
     def test_view_mode_text_selection_and_clipboard(self):
         root=Path(__file__).resolve().parents[1]
         environment=_environment(root)

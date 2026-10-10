@@ -103,6 +103,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.selected_shape = None
         self.selected_table = None
         self.table_drag_state = None
+        self.table_drag_table = None
         self.selected_stroke = None
         self.text_edit_popover = None
         self.text_edit_view = None
@@ -2801,6 +2802,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self.selected_stroke = None
         self.selected_table = None
         self.table_drag_state = None
+        self.table_drag_table = None
         self.hide_text_editor()
 
         if extract_objects:
@@ -3129,7 +3131,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 r, g, b = self.dragged_object.color
                 cr.set_source_rgba(r, g, b, 0.6)
                 
-                import re
                 attr_list = Pango.AttrList()
                 
                 for match in re.finditer(r'(https?://[^\s]+|www\.[^\s]+)', self.dragged_object.text):
@@ -3535,7 +3536,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     ("e", rect_x + rect_w, rect_y + rect_h / 2.0),            # right
                 ]
                 
-                if isinstance(selected_obj, (TableSelection,EditableText)):
+                if isinstance(selected_obj, EditableText):
                     handles = handles[:4]
                 for handle_name, handle_x, handle_y in handles:
                     cr.set_source_rgba(handle_color_rgba.red, handle_color_rgba.green, handle_color_rgba.blue, 1.0)
@@ -3715,18 +3716,19 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         return None
 
     def _is_table_preview_member(self, obj):
-        return (getattr(self, 'table_drag_state', None) is not None
-                and getattr(self, 'selected_table', None) is not None
-                and obj in self.selected_table.objects)
+        table = getattr(self, 'table_drag_table', None)
+        return (getattr(self, 'table_drag_state', None) is not None and table is not None
+                and any(obj is member for member in table.objects))
 
     def _cancel_table_drag(self):
         states=getattr(self,'table_drag_state',None)
-        table=getattr(self,'selected_table',None)
+        table=getattr(self,'table_drag_table',None)
         if states is not None and table is not None:
             for obj,state in zip(table.objects,states):
                 obj.__dict__.update(copy.deepcopy(state))
         self._clear_table_preview()
         self.table_drag_state=None
+        self.table_drag_table=None
         self.table_resize_handle=None
 
     def _clear_table_preview(self):
@@ -3810,25 +3812,37 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         self._update_ui_state()
         self.pdf_view.queue_draw()
 
-    def _update_table_drag(self, offset_x, offset_y):
-        table = self.selected_table
+    def _update_table_drag(self, offset_x, offset_y, keep_ratio=False):
+        # The gesture owns its table; the selection may change mid-drag (double-click).
+        table = self.table_drag_table
         x0, y0, x1, y1 = self.table_drag_bbox
         dx, dy = self._visual_to_unrotated_delta(offset_x/self.zoom_level, offset_y/self.zoom_level)
         handle = self.table_resize_handle
+        # Keep the table on the page (unrotated page coordinates).
+        page = self.doc[table.page_number].cropbox
+        page_w, page_h = page.width, page.height
         if handle:
             width, height = x1-x0, y1-y0
             sx = (width + (dx if 'e' in handle else -dx))/width if 'e' in handle or 'w' in handle else 1
             sy = (height + (dy if 's' in handle else -dy))/height if 's' in handle or 'n' in handle else 1
-            # Corner drags preserve proportions, including text and cell padding.
-            if len(handle) == 2:
+            max_sx = ((page_w-x0) if 'e' in handle else x1)/width if 'e' in handle or 'w' in handle else float('inf')
+            max_sy = ((page_h-y0) if 's' in handle else y1)/height if 's' in handle or 'n' in handle else float('inf')
+            # Corners resize freely; with Shift they keep the table's proportions.
+            if len(handle) == 2 and keep_ratio:
                 scale = sx if abs(sx-1) >= abs(sy-1) else sy
-                sx = sy = max(scale, 10/min(width, height))
+                sx = sy = max(min(scale, max_sx, max_sy), 10/min(width, height))
             else:
-                sx, sy = max(sx, 10/width), max(sy, 10/height)
+                sx = max(min(sx, max_sx), 10/width) if max_sx != float('inf') else 1
+                sy = max(min(sy, max_sy), 10/height) if max_sy != float('inf') else 1
             nx0 = x1-width*sx if 'w' in handle else x0
             ny0 = y1-height*sy if 'n' in handle else y0
             bounds = (nx0, ny0, nx0+width*sx, ny0+height*sy)
         else:
+            # Tables larger than the page keep their position on that axis.
+            if x1-x0 <= page_w:
+                dx = min(max(dx, -x0), page_w-x1)
+            if y1-y0 <= page_h:
+                dy = min(max(dy, -y0), page_h-y1)
             bounds = (x0+dx, y0+dy, x1+dx, y1+dy)
         table.transform(self.table_drag_state, self.table_drag_bbox, bounds)
         self.pdf_view.queue_draw()
@@ -3891,7 +3905,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             ("e", rect_x + rect_w, rect_y + rect_h / 2.0),
         ]
         
-        if isinstance(selected_obj, (TableSelection,EditableText)):
+        if isinstance(selected_obj, EditableText):
             handles = handles[:4]
         for handle_name, handle_x, handle_y in handles:
             if abs(px - handle_x) <= handle_tolerance and abs(py - handle_y) <= handle_tolerance:
@@ -5154,6 +5168,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 return
             if self.view_mode:
                 self._update_cursor_for_tool()
+        if getattr(self, 'table_drag_state', None) is not None:
+            # Keep the gesture's cursor while a table is moved or resized.
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name(
+                self._handle_cursor_name(self.table_resize_handle) if self.table_resize_handle else 'move'))
+            return
         if not getattr(self, 'view_mode', False) and not getattr(self, 'dragged_object', None):
             selected_obj = getattr(self, 'selected_table', None) or self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
             if selected_obj:
@@ -5173,7 +5192,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 elif handle in ("w", "e"):
                     self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("ew-resize"))
                     return
+            if self.tool_mode == 'select' and self.inline_editor_widget is None:
+                page_x = (x - max(0, (self.pdf_view.get_width() - self.current_pdf_page_width) / 2)) / self.zoom_level
+                page_y = (y - max(0, (self.pdf_view.get_height() - self.current_pdf_page_height) / 2)) / self.zoom_level
+                if self._find_table_at_pos(page_x, page_y):
+                    self.pdf_view.set_cursor(Gdk.Cursor.new_from_name('move'))
+                    return
             self._update_cursor_for_tool()
+
+    @staticmethod
+    def _handle_cursor_name(handle):
+        return {'nw': 'nwse-resize', 'se': 'nwse-resize', 'ne': 'nesw-resize', 'sw': 'nesw-resize',
+                'n': 'ns-resize', 's': 'ns-resize', 'w': 'ew-resize', 'e': 'ew-resize'}.get(handle, 'move')
 
     def _update_inline_editor_position(self):
         """Align the editable text with its original PDF bounding box."""
@@ -5889,6 +5919,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self._apply_and_hide_editor()
                 self._select_table(table)
                 return
+            if table and n_press > 1:
+                # A double-click edits the cell: drop the drag its second press started.
+                self._cancel_table_drag()
             self.selected_table = None
             if table and n_press > 1 and clicked_text:
                 self.selected_text = clicked_text
@@ -6514,6 +6547,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 return True
         elif keyval == Gdk.KEY_Delete:
             self.commit_pending_format_change()
+            table = getattr(self, 'selected_table', None)
+            if table is not None and self.inline_editor_widget is None:
+                from .undo_manager import DeleteObjectsCommand
+                command = DeleteObjectsCommand(self, table.objects)
+                command.execute()
+                self.undo_manager.add_command(command)
+                self._update_ui_state()
+                return True
             obj_to_delete = self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
             if obj_to_delete and not (self.inline_editor_widget is not None):
                 self._handle_delete_with_confirmation(obj_to_delete, "delete_confirm_title")
@@ -6747,6 +6788,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.commit_pending_format_change()
                 self._select_table(table)
                 self.table_drag_state = [copy.deepcopy(obj.__dict__) for obj in table.objects]
+                self.table_drag_table = table
                 self.table_drag_bbox = table.bbox
                 self._table_preview_doc = fitz.open(stream=self.doc.tobytes(), filetype='pdf')
                 key = (id(self.doc), table.page_number)
@@ -6760,6 +6802,8 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self._report_command_error(error)
                     return
                 self.table_resize_handle = handle
+                if hasattr(self.pdf_view, 'set_cursor'):
+                    self.pdf_view.set_cursor(Gdk.Cursor.new_from_name(self._handle_cursor_name(handle) if handle else 'move'))
                 gesture.set_state(Gtk.EventSequenceState.CLAIMED)
                 return
             self.selected_table = None
@@ -7054,7 +7098,12 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
 
         if getattr(self, 'table_drag_state', None) is not None:
-            self._update_table_drag(offset_x, offset_y)
+            state = gesture.get_current_event_state() if hasattr(gesture, 'get_current_event_state') else 0
+            try:
+                keep_ratio = bool(state & Gdk.ModifierType.SHIFT_MASK)
+            except TypeError:
+                keep_ratio = False
+            self._update_table_drag(offset_x, offset_y, keep_ratio)
             return
 
         if not self.dragged_object:
@@ -7431,10 +7480,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         
         if getattr(self, 'table_drag_state', None) is not None:
             self._clear_table_preview()
-            table = self.selected_table
+            table = self.table_drag_table
             old_states = self.table_drag_state
             new_states = [copy.deepcopy(obj.__dict__) for obj in table.objects]
             self.table_drag_state = None
+            self.table_drag_table = None
             self.table_resize_handle = None
             if any(old['bbox'] != new['bbox'] for old, new in zip(old_states, new_states)):
                 command = EditTableCommand(self, table.objects, old_states, new_states)
@@ -8127,7 +8177,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             
             if ctrl_pressed and self.view_selected_text:
                 import webbrowser
-                import re
                 match = re.search(r'https?://[^\s]+', self.view_selected_text)
                 if match:
                     webbrowser.open(match.group(0))

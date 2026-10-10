@@ -35,6 +35,40 @@ class StampTextTests(unittest.TestCase):
         self.assertLessEqual(tools.STAMP_TEXT_LIMIT,48)
         self.assertGreaterEqual(tools.STAMP_DETAILS_LIMIT,len('{datetime} {author}'))
 
+    def test_every_template_and_shape_places(self):
+        import gi
+        gi.require_version('Gtk','4.0'); gi.require_version('Adw','1')
+        from pdflx.stamp_dialog import TEMPLATES
+        from pdflx.stamp_shapes import SHAPES
+        names=[name for name,_style in TEMPLATES]
+        self.assertNotIn('Sign here',names)
+        for name in ('Verified','Top priority','Thank you','On hold','Archived','Scanned','Original'):
+            self.assertIn(name,names)
+        used={style['shape'] for _name,style in TEMPLATES}
+        self.assertTrue({'hexagon','burst','tag','ticket'}<=used)
+        doc=fitz.open()
+        doc.new_page(width=600,height=900)
+        for name,style in TEMPLATES:
+            tools.place_stamp(doc,0,(20,20),name,170,'Reviewer',dict(style))
+        for shape in SHAPES:
+            tools.place_stamp(doc,0,(20,400),'Custom',170,'',dict(TEMPLATES[0][1],shape=shape,text='SHAPE TEST'))
+        page=doc[0]
+        self.assertEqual(len(list(page.annots())),len(TEMPLATES)+len(SHAPES))
+
+    def test_opacity_changes_the_rendered_stamp(self):
+        def darkness(opacity,angle=0):
+            doc=fitz.open()
+            doc.new_page(width=300,height=200)
+            style=dict(text='APPROVED',color=(0.1,0.2,0.7),shape='rounded',border='Double',
+                       opacity=opacity,angle=angle,fill=True)
+            tools.place_stamp(doc,0,(20,20),'Custom',200,'',style)
+            with fitz.open(stream=doc.tobytes(),filetype='pdf') as saved:
+                samples=saved[0].get_pixmap(alpha=False).samples
+            return sum(255-value for value in samples)
+        solid,faded,tilted=darkness(1),darkness(0.3),darkness(0.3,angle=-15)
+        self.assertLess(faded,solid*0.5)
+        self.assertLess(tilted,solid*0.5)
+
 
 if __name__=='__main__':
     unittest.main()

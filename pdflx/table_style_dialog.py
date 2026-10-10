@@ -36,7 +36,7 @@ class TableStyleDialog(ToolDialog):
             self.field(_(label), color)
             self.colors[key] = color
             color.connect('color-set', self.preview_style)
-        self.section(_('table_style_border'))
+        self.section(_('table_style_lines_text'))
         self.border = self.spin(_('table_style_border_width'), style['border_width'], .1, 5, .1)
         self.size = self.spin(_('table_font'), style['font_size'], 6, 24)
         self.picture = Gtk.Picture(can_shrink=True, content_fit=Gtk.ContentFit.CONTAIN, vexpand=True)
@@ -80,10 +80,10 @@ class TableStyleDialog(ToolDialog):
         self.loading = False
         self.preview_style()
 
-    def updated_states(self):
+    def updated_states(self, fitted=None):
         if not self.menu.editable():
             raise ValueError(_('table_document_changed'))
-        return style_states(self.table, self.source[self.table.page_number], self.settings())
+        return style_states(self.table, self.source[self.table.page_number], self.settings(), fitted)
 
     def preview_style(self, *args):
         if self.loading:
@@ -91,7 +91,8 @@ class TableStyleDialog(ToolDialog):
         if args and self.preset.get_selected():
             self.preset.set_selected(0)
         try:
-            states = self.updated_states()
+            fitted = []
+            states = self.updated_states(fitted)
             from . import pdf_handler
             source_page = self.source[self.table.page_number]
             with fitz.open() as scratch:
@@ -110,7 +111,7 @@ class TableStyleDialog(ToolDialog):
                 clip = (fitz.Rect(self.table.bbox)*page.rotation_matrix)+(-3,-3,3,3)
                 pixmap = page.get_pixmap(matrix=fitz.Matrix(1.2,1.2), clip=clip, alpha=False)
                 self.picture.set_paintable(Gdk.Texture.new_from_bytes(GLib.Bytes.new(pixmap.tobytes('png'))))
-            self.message.set_text(_('table_style_hint'))
+            self.message.set_text(_('table_style_fitted', len(fitted)) if fitted else _('table_style_hint'))
         except Exception as error:
             self.picture.set_paintable(None)
             self.message.set_text(str(error))

@@ -3,11 +3,58 @@ and the straight Line / Arrow tools."""
 import copy
 import math
 
-from gi.repository import Gtk
+from gi.repository import GObject, Gtk
 
 from .i18n import _
 from .models import EditableShape, EditableStroke
 from .shape_geometry import PRESETS, DASHES
+
+class DashPicker(Gtk.Box):
+    """Solid / dashed / dotted as linked toggle buttons.
+
+    Replaces a Gtk.DropDown inside the toolbar popovers: a drop-down there opens
+    a popover inside a popover, and GTK can leave the window's pointer grab
+    stuck after it closes, so nothing on the window is clickable any more.
+    Keeps the DropDown API used here (``selected`` and ``notify::selected``).
+    """
+    __gtype_name__ = 'PdfLXDashPicker'
+
+    def __init__(self, labels):
+        super().__init__(valign=Gtk.Align.CENTER)
+        self.add_css_class('linked')
+        self._selected = 0
+        self.buttons = []
+        for index, label in enumerate(labels):
+            button = Gtk.ToggleButton(label=label, active=index == 0)
+            if self.buttons:
+                button.set_group(self.buttons[0])
+            button.connect('toggled', self._toggled, index)
+            self.append(button)
+            self.buttons.append(button)
+
+    @GObject.Property(type=int, default=0)
+    def selected(self):
+        return self._selected
+
+    @selected.setter
+    def selected(self, index):
+        index = max(0, min(len(self.buttons) - 1, int(index)))
+        if index != self._selected:
+            self._selected = index
+            if not self.buttons[index].get_active():
+                self.buttons[index].set_active(True)
+
+    def get_selected(self):
+        return self._selected
+
+    def set_selected(self, index):
+        if int(index) != self._selected:
+            self.set_property('selected', index)
+
+    def _toggled(self, button, index):
+        if button.get_active() and index != self._selected:
+            self.set_property('selected', index)
+
 
 SHAPE_DEFAULTS = {'corner_radius': 0.0, 'opacity': 1.0, 'dash': 'solid', 'sides': 6, 'star_points': 5,
                   'star_inner': 0.5}
@@ -85,9 +132,9 @@ class ShapeTools:
     @staticmethod
     def _dash(grid, row):
         grid.attach(Gtk.Label(label=_("shape_line_style"), xalign=0, hexpand=True), 0, row, 1, 1)
-        dropdown = Gtk.DropDown.new_from_strings([_("line_solid"), _("line_dashed"), _("line_dotted")])
-        grid.attach(dropdown, 1, row, 1, 1)
-        return dropdown
+        picker = DashPicker([_("line_solid"), _("line_dashed"), _("line_dotted")])
+        grid.attach(picker, 1, row, 1, 1)
+        return picker
 
     def populate_menu(self, grid, popover):
         """Shape picker: presets in a grid, then the Line and Arrow tools."""

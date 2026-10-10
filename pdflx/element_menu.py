@@ -9,7 +9,7 @@ from gi.repository import Gtk,Gdk,GLib,GObject
 from . import document_tools as tools,document_features as features
 from .models import EditableText,EditableShape,EditableImage,EditableStroke
 from .table_creation import TableSelection
-from .undo_manager import AddObjectCommand,AddTableCommand,DeleteObjectCommand,CompositeCommand,EditObjectCommand,EditTableCommand
+from .undo_manager import AddObjectCommand,AddTableCommand,DeleteObjectCommand,DeleteObjectsCommand,CompositeCommand,EditObjectCommand,EditTableCommand
 from .document_tool_ui import ToolDialog
 from .i18n import _
 
@@ -203,8 +203,10 @@ class ElementMenu:
         elif kind=='field':
             w._mutate_document(lambda:tools.delete_form_field(self.source,self.page,obj['xref']))
         else:
-            objects=obj.objects if kind=='table' else [obj]
-            self.execute(CompositeCommand(w,[DeleteObjectCommand(w,item) for item in objects]))
+            if kind=='table':
+                self.execute(DeleteObjectsCommand(w,obj.objects))
+            else:
+                self.execute(CompositeCommand(w,[DeleteObjectCommand(w,obj)]))
         w.selected_text=w.selected_image=w.selected_shape=w.selected_stroke=w.selected_table=None
         w.stamp_interaction.cancel()
 

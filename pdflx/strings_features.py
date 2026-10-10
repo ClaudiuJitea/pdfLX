@@ -604,6 +604,19 @@ STRINGS_EN = {
     'qf_signature_tip': 'Certificate signature field',
     'qf_submit_tip': 'Button that submits the form to an address',
     'qf_reset_tip': 'Button that clears the form',
+    'qf_button': 'Button',
+    'qf_button_tip': 'Button that resets, prints, opens a link, goes to a page or runs a script',
+    'qf_button_action': 'Action',
+    'qf_action_reset': 'Reset form',
+    'qf_action_print': 'Print',
+    'qf_action_url': 'Open link',
+    'qf_action_goto': 'Go to page',
+    'qf_action_javascript': 'Run JavaScript',
+    'qf_script_hint': 'JavaScript, e.g. app.alert("Hello")',
+    'qf_need_script': 'Enter the script first.',
+    'qf_goto_page': 'Destination page',
+    'qf_link_hint': 'Web address (https://…) or mailto:',
+    'qf_need_link': 'Enter the web address first.',
     'qf_section_style': 'Style',
     'qf_style_sub': 'Colors, font and borders of new fields',
     'qf_snap_sub': 'Line fields up with each other',
@@ -768,7 +781,9 @@ STRINGS_EN = {
     'stamp_tpl_confidential': 'Confidential', 'stamp_tpl_final': 'Final', 'stamp_tpl_for_comment': 'For comment',
     'stamp_tpl_reviewed': 'Reviewed', 'stamp_tpl_received': 'Received', 'stamp_tpl_paid': 'Paid',
     'stamp_tpl_completed': 'Completed', 'stamp_tpl_urgent': 'Urgent', 'stamp_tpl_void': 'Void',
-    'stamp_tpl_copy': 'Copy', 'stamp_tpl_sign_here': 'Sign here',
+    'stamp_tpl_copy': 'Copy', 'stamp_tpl_verified': 'Verified', 'stamp_tpl_top_priority': 'Top priority',
+    'stamp_tpl_thank_you': 'Thank you', 'stamp_tpl_on_hold': 'On hold', 'stamp_tpl_archived': 'Archived',
+    'stamp_tpl_scanned': 'Scanned', 'stamp_tpl_original': 'Original',
     'props_width': 'Width',
     'redact_section_search': 'Search',
     'props_height': 'Height',
@@ -1092,5 +1107,22 @@ for _language, _values in {
     'ru': {'menu_group_create': 'Создать', 'menu_group_edit': 'Правка и вставка', 'menu_group_forms': 'Формы',
            'menu_preferences': 'Настройки', 'menu_more_tools': 'Другие инструменты', 'menu_section_review': 'Рецензирование',
            'menu_section_page_look': 'Оформление страниц', 'menu_section_protect': 'Защита', 'menu_group_annotate': 'Комментарии и рецензия'},
+}.items():
+    MENU_TRANSLATIONS[_language].update(_values)
+
+# Form builder: generic button with a chosen action.
+for _language, _values in {
+    'tr': {'qf_goto_page': 'Hedef sayfa', 'qf_link_hint': 'Web adresi (https://…) veya mailto:', 'qf_need_link': 'Önce web adresini girin.',
+           'qf_button': 'Düğme', 'qf_button_tip': 'Formu sıfırlayan, yazdıran, bağlantı açan, sayfaya giden veya betik çalıştıran düğme', 'qf_button_action': 'Eylem', 'qf_action_reset': 'Formu sıfırla', 'qf_action_print': 'Yazdır', 'qf_action_url': 'Bağlantıyı aç', 'qf_action_goto': 'Sayfaya git', 'qf_action_javascript': 'JavaScript çalıştır', 'qf_script_hint': 'JavaScript, ör. app.alert("Merhaba")', 'qf_need_script': 'Önce betiği girin.'},
+    'fr': {'qf_goto_page': 'Page de destination', 'qf_link_hint': 'Adresse web (https://…) ou mailto:', 'qf_need_link': 'Saisissez d’abord l’adresse web.',
+           'qf_button': 'Bouton', 'qf_button_tip': 'Bouton qui réinitialise, imprime, ouvre un lien, va à une page ou exécute un script', 'qf_button_action': 'Action', 'qf_action_reset': 'Réinitialiser', 'qf_action_print': 'Imprimer', 'qf_action_url': 'Ouvrir le lien', 'qf_action_goto': 'Aller à la page', 'qf_action_javascript': 'Exécuter du JavaScript', 'qf_script_hint': 'JavaScript, ex. app.alert("Bonjour")', 'qf_need_script': 'Saisissez d’abord le script.'},
+    'de': {'qf_goto_page': 'Zielseite', 'qf_link_hint': 'Webadresse (https://…) oder mailto:', 'qf_need_link': 'Geben Sie zuerst die Webadresse ein.',
+           'qf_button': 'Schaltfläche', 'qf_button_tip': 'Schaltfläche zum Zurücksetzen, Drucken, Öffnen eines Links, Springen zu einer Seite oder Ausführen eines Skripts', 'qf_button_action': 'Aktion', 'qf_action_reset': 'Formular zurücksetzen', 'qf_action_print': 'Drucken', 'qf_action_url': 'Link öffnen', 'qf_action_goto': 'Zu Seite', 'qf_action_javascript': 'JavaScript ausführen', 'qf_script_hint': 'JavaScript, z. B. app.alert("Hallo")', 'qf_need_script': 'Geben Sie zuerst das Skript ein.'},
+    'es': {'qf_goto_page': 'Página de destino', 'qf_link_hint': 'Dirección web (https://…) o mailto:', 'qf_need_link': 'Introduzca primero la dirección web.',
+           'qf_button': 'Botón', 'qf_button_tip': 'Botón que restablece, imprime, abre un enlace, va a una página o ejecuta un script', 'qf_button_action': 'Acción', 'qf_action_reset': 'Restablecer formulario', 'qf_action_print': 'Imprimir', 'qf_action_url': 'Abrir enlace', 'qf_action_goto': 'Ir a página', 'qf_action_javascript': 'Ejecutar JavaScript', 'qf_script_hint': 'JavaScript, p. ej. app.alert("Hola")', 'qf_need_script': 'Introduzca primero el script.'},
+    'it': {'qf_goto_page': 'Pagina di destinazione', 'qf_link_hint': 'Indirizzo web (https://…) o mailto:', 'qf_need_link': 'Inserisci prima l’indirizzo web.',
+           'qf_button': 'Pulsante', 'qf_button_tip': 'Pulsante che reimposta, stampa, apre un link, va a una pagina o esegue uno script', 'qf_button_action': 'Azione', 'qf_action_reset': 'Reimposta modulo', 'qf_action_print': 'Stampa', 'qf_action_url': 'Apri link', 'qf_action_goto': 'Vai a pagina', 'qf_action_javascript': 'Esegui JavaScript', 'qf_script_hint': 'JavaScript, ad es. app.alert("Ciao")', 'qf_need_script': 'Inserisci prima lo script.'},
+    'ru': {'qf_goto_page': 'Целевая страница', 'qf_link_hint': 'Веб-адрес (https://…) или mailto:', 'qf_need_link': 'Сначала введите веб-адрес.',
+           'qf_button': 'Кнопка', 'qf_button_tip': 'Кнопка сброса, печати, открытия ссылки, перехода на страницу или запуска скрипта', 'qf_button_action': 'Действие', 'qf_action_reset': 'Сбросить форму', 'qf_action_print': 'Печать', 'qf_action_url': 'Открыть ссылку', 'qf_action_goto': 'На страницу', 'qf_action_javascript': 'Выполнить JavaScript', 'qf_script_hint': 'JavaScript, напр. app.alert("Привет")', 'qf_need_script': 'Сначала введите скрипт.'},
 }.items():
     MENU_TRANSLATIONS[_language].update(_values)

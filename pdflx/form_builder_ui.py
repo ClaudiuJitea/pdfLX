@@ -46,7 +46,7 @@ class BuilderPanel:
         self.buttons = {}
         for title, keys in ((_("qf_group_inputs"), ('text', 'multiline', 'date', 'email', 'phone', 'number')),
                             (_("qf_group_choices"), ('dropdown', 'list', 'checkbox', 'radio')),
-                            (_("qf_group_buttons"), ('submit', 'reset', 'signature'))):
+                            (_("qf_group_buttons"), ('submit', 'button', 'signature'))):
             caption = Gtk.Label(label=title, xalign=0)
             caption.add_css_class('pdflx-card-caption')
             card.append(caption)
@@ -68,8 +68,23 @@ class BuilderPanel:
             card.append(grid)
         self.choices = Gtk.Entry(placeholder_text=_("qf_choices_hint"), visible=False)
         card.append(self.choices)
+        # What a generic button does; the boxes below show what that action needs.
+        self.action_row = Gtk.Box(spacing=8, visible=False)
+        self.action_row.append(Gtk.Label(label=_("qf_button_action"), xalign=0, hexpand=True))
+        self.action = Gtk.DropDown.new_from_strings([_(f"qf_action_{key}") for key in builder.BUTTON_ACTIONS])
+        self.action.connect('notify::selected', lambda *_: self._show_action_fields())
+        self.action_row.append(self.action)
+        card.append(self.action_row)
         self.url = Gtk.Entry(placeholder_text=_("qf_url_hint"), visible=False)
         card.append(self.url)
+        # Destination of a Go to page button (1-based, as shown to the user).
+        self.page_row = Gtk.Box(spacing=8, visible=False)
+        self.page_row.append(Gtk.Label(label=_("qf_goto_page"), xalign=0, hexpand=True))
+        self.page = Gtk.SpinButton.new_with_range(1, 9999, 1)
+        self.page_row.append(self.page)
+        card.append(self.page_row)
+        self.script = Gtk.Entry(placeholder_text=_("qf_script_hint"), visible=False)
+        card.append(self.script)
         self.hint = Gtk.Label(xalign=0, wrap=True, max_width_chars=32, visible=False)
         self.hint.add_css_class('dim-label')
         self.hint.add_css_class('caption')
@@ -160,18 +175,38 @@ class BuilderPanel:
         self.preset = preset
         c.draw_settings = dict(source=c.window.doc, builder=True, preset=preset)
         self.choices.set_visible(preset in CHOICE_PRESETS)
-        self.url.set_visible(preset == 'submit')
+        pages = c.window.doc.page_count
+        self.page.set_range(1, max(1, pages))
+        self.page.set_value(min(pages, c.window.current_page_index + 2))
+        self.action_row.set_visible(preset == 'button')
+        self._show_action_fields()
         self.hint.set_text(_("qf_place_hint"))
         self.hint.set_visible(True)
         c.window.on_tool_selected(None, 'form_create')
         c.window.status_label.set_text(_("qf_place_hint"))
 
+    def button_action(self):
+        if self.preset == 'submit':
+            return 'submit'
+        if self.preset == 'button':
+            return builder.BUTTON_ACTIONS[self.action.get_selected()]
+        return None
+
+    def _show_action_fields(self):
+        action = self.button_action()
+        self.url.set_visible(action in ('submit', 'url'))
+        self.url.set_placeholder_text(_("qf_link_hint") if action == 'url' else _("qf_url_hint"))
+        self.page_row.set_visible(action == 'goto')
+        self.script.set_visible(action == 'javascript')
+
+    def _hide_options(self):
+        for widget in (self.choices, self.action_row, self.url, self.page_row, self.script, self.hint):
+            widget.set_visible(False)
+
     def stop(self):
         self.preset = None
         self._set_buttons(None)
-        self.choices.set_visible(False)
-        self.url.set_visible(False)
-        self.hint.set_visible(False)
+        self._hide_options()
         settings = getattr(self.controller, 'draw_settings', None)
         if settings and settings.get('builder'):
             self.controller.draw_settings = None
@@ -183,9 +218,7 @@ class BuilderPanel:
         if self.preset and self.window.tool_mode != 'form_create':
             self.preset = None
             self._set_buttons(None)
-            self.choices.set_visible(False)
-            self.url.set_visible(False)
-            self.hint.set_visible(False)
+            self._hide_options()
 
     def _choice_list(self):
         values = [part.strip() for part in self.choices.get_text().split(',') if part.strip()]
@@ -216,10 +249,16 @@ class BuilderPanel:
         guess = label_text or builder.nearby_label(page, native, right=preset in ('checkbox', 'radio'))
         name = builder.field_name(guess, existing, fallback=preset)
         required = self.required.get_active() and kind not in ('button', 'signature')
-        values = {'caption': label_text, 'url': self.url.get_text().strip()}
-        if preset == 'submit' and not values['url']:
-            w.status_label.set_text(_("qf_need_url"))
+        action = self.button_action()
+        values = {'caption': label_text, 'url': self.url.get_text().strip(), 'action': action,
+                  'page': int(self.page.get_value()) - 1, 'script': self.script.get_text().strip()}
+        if action in ('submit', 'url') and not values['url']:
+            w.status_label.set_text(_("qf_need_link") if action == 'url' else _("qf_need_url"))
             self.url.grab_focus()
+            return
+        if action == 'javascript' and not values['script']:
+            w.status_label.set_text(_("qf_need_script"))
+            self.script.grab_focus()
             return
         options = builder.field_options(preset, values)
         if guess and not is_button:

@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.4 — 2026-10-10
+
+- Tables move smoothly and can be resized freely from any of eight handles
+  (hold Shift to keep the proportions); they stay on the page, and the pointer
+  shows move and resize cursors.
+- Deleting a large table is instant and undoes in one step, instead of freezing the app.
+- Fixed a crash when a table drag ended, and the Table Style dialog now shrinks text that
+  would not fit its cells instead of refusing the style.
+- Fixed the window no longer accepting clicks after choosing a line style in the pen,
+  shape or line options; line styles are now picked with Solid/Dashed/Dotted buttons.
+- Long pen strokes no longer slow down while drawing, and freehand arrowheads point the
+  right way.
+- New stamp designs (Verified, Top priority, Thank you, On hold, Archived, Scanned,
+  Original) with hexagon, burst, tag and ticket shapes; the "Sign here" stamp was removed.
+- The stamp opacity slider now works.
+- Forms: a new Button field with a choice of action (reset, print, open a link, go to a
+  page, or run JavaScript) sits next to Submit and Signature.
+
 ## 0.4.3 — 2026-10-10
 
 - New highlight eraser tool: click a highlight to delete it, or drag across text to

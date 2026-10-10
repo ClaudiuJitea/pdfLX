@@ -379,9 +379,21 @@ class EditableStroke:
             self.recalculate_bbox()
 
     def add_point(self, x, y):
-        """Add point to stroke and recalculate bbox."""
-        self.points.append((float(x), float(y)))
-        self.recalculate_bbox()
+        """Add point to stroke and grow the bbox to include it.
+
+        Growing the bbox instead of recomputing it keeps long freehand strokes
+        from getting slower with every point.
+        """
+        x, y = float(x), float(y)
+        self.points.append((x, y))
+        if len(self.points) == 1 or not self.bbox or self.bbox == (0, 0, 0, 0):
+            self.recalculate_bbox()
+            return
+        pad = max(self.stroke_width / 2.0, 2.0)
+        x0, y0, x1, y1 = self.bbox
+        self.bbox = (min(x0, x - pad), min(y0, y - pad), max(x1, x + pad), max(y1, y + pad))
+        self.original_bbox = self.bbox
+        self.x, self.y = self.bbox[0], self.bbox[1]
 
     def recalculate_bbox(self):
         """Recalculate bounding box from points with stroke width padding."""

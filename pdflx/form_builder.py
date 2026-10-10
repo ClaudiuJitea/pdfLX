@@ -28,8 +28,14 @@ PRESETS = (
     ('radio', 'qf_radio', 'radio', (200, 16)),
     ('signature', 'qf_signature', 'signature', (200, 40)),
     ('submit', 'qf_submit', 'button', (180, 32)),
-    ('reset', 'qf_reset', 'button', (120, 28)),
+    ('button', 'qf_button', 'button', (140, 28)),
 )
+BUTTON_PRESETS = ('submit', 'button')
+# Actions offered for a generic button, in the order the panel lists them.
+BUTTON_ACTIONS = ('reset', 'print', 'url', 'goto', 'javascript')
+# Default button colours: green sends, grey clears, blue navigates, prints or runs a script.
+BUTTON_COLORS = {'submit': (0.08, 0.58, 0.45), 'reset': (0.42, 0.45, 0.5), 'print': (0.13, 0.36, 0.7),
+                 'url': (0.13, 0.36, 0.7), 'goto': (0.13, 0.36, 0.7), 'javascript': (0.13, 0.36, 0.7)}
 PRESET_BY_KEY = {key: (label, kind, size) for key, label, kind, size in PRESETS}
 EMAIL_SCRIPT = ('if (event.value && !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(event.value)) '
                 '{ app.alert("Enter a valid email address."); event.rc = false; }')
@@ -267,17 +273,27 @@ def field_options(preset, values):
     options = {key: s[key] for key in APPEARANCE_KEYS}
     if preset == 'multiline':
         options['multiline'] = True
-    if preset in ('submit', 'reset'):
-        options['fill_color'] = values.get('button_color', (0.08, 0.58, 0.45))
+    if preset in BUTTON_PRESETS:
+        action = 'submit' if preset == 'submit' else values.get('action', 'reset')
+        if action not in BUTTON_COLORS:
+            raise ValueError('Choose a supported button action.')
+        options['fill_color'] = values.get('button_color', BUTTON_COLORS[action])
         options['text_color'] = (1, 1, 1)
         options['border_color'] = None
         options['font_size'] = 0
-        options['button_caption'] = values.get('caption') or ('Submit' if preset == 'submit' else 'Reset form')
-        if preset == 'submit':
-            options.update(button_action='submit', button_url=values.get('url', ''),
-                           button_format=values.get('format', 'html'))
-        else:
-            options['button_action'] = 'reset'
+        page = int(values.get('page', 0) or 0)
+        default = {'submit': 'Submit', 'reset': 'Reset form', 'print': 'Print', 'url': 'Open link',
+                   'goto': f'Go to page {page + 1}', 'javascript': 'Run'}[action]
+        options['button_caption'] = values.get('caption') or default
+        options['button_action'] = action
+        if action == 'submit':
+            options.update(button_url=values.get('url', ''), button_format=values.get('format', 'html'))
+        elif action == 'url':
+            options['button_url'] = values.get('url', '')
+        elif action == 'goto':
+            options['button_page'] = page
+        elif action == 'javascript':
+            options['button_script'] = values.get('script', '')
     if preset == 'checkbox':
         options.pop('font', None)
         options.pop('font_size', None)

@@ -14,6 +14,8 @@ FAMILIES = ('DejaVu Sans', 'DejaVu Serif', 'DejaVu Sans Mono')
 RED, GREEN, BLUE, ORANGE, PURPLE, GRAY, BLACK = ((0.8, 0.1, 0.12), (0.1, 0.52, 0.24), (0.13, 0.32, 0.72),
                                                  (0.86, 0.44, 0.0), (0.45, 0.2, 0.62), (0.4, 0.42, 0.46),
                                                  (0.1, 0.1, 0.12))
+# Extra template colours (not in the swatch row; any colour can be picked).
+TEAL, NAVY, BROWN = (0.0, 0.47, 0.47), (0.1, 0.2, 0.45), (0.5, 0.32, 0.14)
 SWATCHES = (('red', RED), ('green', GREEN), ('blue', BLUE), ('orange', ORANGE),
             ('purple', PURPLE), ('gray', GRAY), ('black', BLACK))
 
@@ -38,7 +40,13 @@ TEMPLATES = (
     ('Urgent', _template('URGENT', RED, 'badge', 'Solid', fill=True)),
     ('Void', _template('VOID', RED, 'rectangle', 'Double', italic=True)),
     ('Copy', _template('COPY', GRAY, 'rectangle', 'Dashed', italic=True)),
-    ('Sign here', _template('SIGN HERE', ORANGE, 'ribbon', 'Solid', fill=True)),
+    ('Verified', _template('VERIFIED', TEAL, 'hexagon', 'Double', details='{date}')),
+    ('Top priority', _template('TOP PRIORITY', RED, 'burst', 'Solid', fill=True)),
+    ('Thank you', _template('THANK YOU', GREEN, 'burst', 'Solid', fill=True, italic=True)),
+    ('On hold', _template('ON HOLD', ORANGE, 'tag', 'Solid', fill=True)),
+    ('Archived', _template('ARCHIVED', BROWN, 'ticket', 'Solid', details='{date}')),
+    ('Scanned', _template('SCANNED', GRAY, 'ticket', 'Dashed', details='{datetime}')),
+    ('Original', _template('ORIGINAL', NAVY, 'seal', 'Double', details='{date}')),
 )
 FIELDS = (('{date}', 'stamp_field_date'), ('{time}', 'stamp_field_time'),
           ('{datetime}', 'stamp_field_datetime'), ('{author}', 'stamp_field_author'))
@@ -69,7 +77,8 @@ def _rgba(rgb):
 def _shape_icon(shape):
     """Small grey outline of a stamp shape for the shape picker."""
     from . import stamp_shapes
-    width, height = (30, 30) if shape in ('circle', 'seal') else (44, 26 if shape in ('oval', 'ribbon', 'badge') else 18)
+    width, height = (30, 30) if shape in ('circle', 'seal') else (
+        44, 26 if shape in ('oval', 'ribbon', 'badge', 'burst') else 20 if shape in ('hexagon', 'tag', 'ticket') else 18)
     with fitz.open() as sample:
         page = sample.new_page(width=width, height=height)
         stamp_shapes.draw_border(page, shape, width, height, (0.5, 0.5, 0.5), 'Solid')
@@ -288,8 +297,12 @@ class StampDialog(SheetDialog):
         color_row.add_suffix(swatches)
         group.add(color_row)
 
-        shape_row = Adw.ActionRow(title=_("tool_stamp_shape"))
-        shapes = Gtk.Box(valign=Gtk.Align.CENTER)
+        # The picker sits under its title so all shapes fit without squeezing it.
+        shape_row = Adw.PreferencesRow(activatable=False, title=_("tool_stamp_shape"))
+        shape_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8,
+                            margin_top=10, margin_bottom=10, margin_start=12, margin_end=12)
+        shape_box.append(Gtk.Label(label=_("tool_stamp_shape"), xalign=0))
+        shapes = Gtk.Box(halign=Gtk.Align.START)
         shapes.add_css_class('linked')
         self.shape_buttons = {}
         first = None
@@ -308,7 +321,8 @@ class StampDialog(SheetDialog):
             shapes.append(button)
             self.shape_buttons[shape] = button
         self.set_shape(initial.get('shape', 'rectangle'))
-        shape_row.add_suffix(shapes)
+        shape_box.append(shapes)
+        shape_row.set_child(shape_box)
         group.add(shape_row)
 
         self.border = Adw.ComboRow(title=_("tool_stamp_border"),

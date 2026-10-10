@@ -678,7 +678,7 @@ class DocumentTools:
         if fmt not in (None, 'date', 'email', 'phone', 'number'):
             raise ToolError('"format" must be date, email, phone or number.')
         if kind == 'button':
-            preset = 'submit' if spec.get('action', 'reset') == 'submit' else 'reset'
+            preset = 'submit' if spec.get('action', 'reset') == 'submit' else 'button'
             if preset == 'submit' and not re.match(r'^(https?://|mailto:)', str(spec.get('url', ''))):
                 raise ToolError('A submit button needs "url" (https://, http:// or mailto:).')
             options = form_builder.field_options(preset, {'caption': spec.get('label'), 'url': spec.get('url', ''),

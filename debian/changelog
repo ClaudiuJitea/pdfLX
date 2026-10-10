@@ -1,3 +1,14 @@
+pdflx (0.4.4) noble; urgency=medium
+
+  * Smooth table moving, free resizing with eight handles, and instant
+    table deletion.
+  * Fixed the window ignoring clicks after choosing a pen or shape line style.
+  * Faster long pen strokes and correct freehand arrowheads.
+  * New stamp designs and working stamp opacity.
+  * Generic form button with a chosen action.
+
+ -- pdfLX contributors <pdflx@localhost>  Sat, 10 Oct 2026 18:00:00 +0200
+
 pdflx (0.4.3) noble; urgency=medium
 
   * New highlight eraser tool for partial or whole highlight removal in edit

@@ -669,6 +669,75 @@ class DeleteObjectCommand(Command):
         self.window._refresh_thumbnail(page_num)
         self.window.pdf_view.queue_draw()
 
+class DeleteObjectsCommand(Command):
+    """Delete many canvas objects (a whole table) with one page rebuild.
+
+    Deleting objects one by one rebuilds the page each time, which takes
+    minutes for a large table.
+    """
+    def __init__(self, window, objects):
+        super().__init__(window)
+        self.objects = list(objects)
+        self.positions = []
+
+    def _collection(self, obj):
+        window = self.window
+        if isinstance(obj, EditableText):
+            return window.editable_texts
+        if isinstance(obj, EditableShape):
+            return window.editable_shapes
+        if isinstance(obj, EditableStroke):
+            if not hasattr(window, 'editable_strokes'):
+                window.editable_strokes = []
+            return window.editable_strokes
+        return window.editable_images
+
+    def _rebuild(self, status):
+        window = self.window
+        pages = sorted({getattr(obj, 'page_number', window.current_page_index) for obj in self.objects})
+        for page_num in pages:
+            success, error = pdf_handler.rebuild_page(
+                window.doc, page_num, window.editable_texts, window.editable_shapes,
+                window.editable_images, all_strokes=getattr(window, 'editable_strokes', []))
+            if not success:
+                raise ValueError(error)
+            window._refresh_thumbnail(page_num)
+        window.document_modified = True
+        window.status_label.set_text(_(status))
+        window.pdf_view.queue_draw()
+
+    def execute(self):
+        window = self.window
+        # Remember list positions so undo restores the original stacking order.
+        self.positions = []
+        for obj in self.objects:
+            collection = self._collection(obj)
+            index = next((i for i, item in enumerate(collection) if item is obj), None)
+            if index is not None:
+                self.positions.append((obj, index))
+        removing = {id(obj) for obj in self.objects}
+        for collection in {id(self._collection(obj)): self._collection(obj) for obj in self.objects}.values():
+            collection[:] = [item for item in collection if id(item) not in removing]
+        for obj in self.objects:
+            page_num = getattr(obj, 'page_number', window.current_page_index)
+            if page_num is not None:
+                self._erase_ghost_if_needed(obj, page_num)
+        for name in ('selected_text', 'selected_shape', 'selected_image', 'selected_stroke'):
+            if id(getattr(window, name, None)) in removing:
+                setattr(window, name, None)
+        table = getattr(window, 'selected_table', None)
+        if table is not None and any(id(obj) in removing for obj in table.objects):
+            window.selected_table = None
+        self._rebuild("object_deleted")
+
+    def undo(self):
+        for obj, index in sorted(self.positions, key=lambda pair: pair[1]):
+            collection = self._collection(obj)
+            if not any(item is obj for item in collection):
+                collection.insert(min(index, len(collection)), obj)
+        self._rebuild("delete_reverted")
+
+
 class CompositeCommand(Command):
     """Composite command executing multiple atomic actions in a single undo step."""
     def __init__(self, window, commands):
