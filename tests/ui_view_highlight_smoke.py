@@ -56,14 +56,47 @@ def drag_highlight():
     assert w.tool_mode=='highlighter'
     items=characters(w.doc[0])
     center=lambda index:(items[index][1].rect.tl+items[index][1].rect.br)/2
-    a,b=center(7),center(10)
+    # Away from the text, so the later eraser clicks hit only the annotations.
+    a,b=center(7)+(0,40),center(10)+(0,40)
     ox=max(0,(w.pdf_view.get_width()-w.current_pdf_page_width)/2)
     oy=max(0,(w.pdf_view.get_height()-w.current_pdf_page_height)/2)
     w.on_drag_begin(Mock(),a.x*w.zoom_level+ox,a.y*w.zoom_level+oy)
     w.on_drag_update(Mock(),(b.x-a.x)*w.zoom_level,(b.y-a.y)*w.zoom_level)
     w.on_drag_end(Mock(),(b.x-a.x)*w.zoom_level,(b.y-a.y)*w.zoom_level)
+    # The view-mode highlighter draws the same freehand marker as edit mode.
+    assert w.view_mode
+    assert len(annotations())==1
+    assert len(w._highlight_strokes())==1
+    w.on_key_pressed(None,Gdk.KEY_Escape,0,Gdk.ModifierType(0))
+    assert w.tool_mode=='select'
+    set_selection(7,10)
+    w.highlight_button.emit('clicked')
     assert len(annotations())==2
     assert len(annotations()[-1]['vertices'])==4*4
+def erase_tool():
+    w._clear_view_selection()
+    w.remove_highlight_button.emit('clicked')
+    assert w.tool_mode=='erase_highlight'
+    items=characters(w.doc[0])
+    center=lambda index:(items[index][1].rect.tl+items[index][1].rect.br)/2
+    ox=max(0,(w.pdf_view.get_width()-w.current_pdf_page_width)/2)
+    oy=max(0,(w.pdf_view.get_height()-w.current_pdf_page_height)/2)
+    def drag(a,b):
+        w.on_pdf_view_pressed(None,1,a.x*w.zoom_level+ox,a.y*w.zoom_level+oy)
+        w.on_drag_begin(Mock(),a.x*w.zoom_level+ox,a.y*w.zoom_level+oy)
+        w.on_drag_update(Mock(),(b.x-a.x)*w.zoom_level,(b.y-a.y)*w.zoom_level)
+        w.on_drag_end(Mock(),(b.x-a.x)*w.zoom_level,(b.y-a.y)*w.zoom_level)
+    # Dragging over part of a highlight keeps the rest of it.
+    drag(center(1),center(3))
+    assert len(annotations())==2
+    assert 0<len(annotations()[0]['vertices'])<6*4
+    assert all(abs(a-b)<.01 for a,b in zip(annotations()[0]['colors']['stroke'],(.2,.702,.4)))
+    # A plain click deletes the whole highlight under the pointer.
+    drag(center(8),center(8))
+    assert len(annotations())==1
+    w.on_key_pressed(None,Gdk.KEY_z,0,Gdk.ModifierType.CONTROL_MASK)
+    w.on_key_pressed(None,Gdk.KEY_z,0,Gdk.ModifierType.CONTROL_MASK)
+    assert [len(item['vertices']) for item in annotations()]==[6*4,4*4]
     w.on_key_pressed(None,Gdk.KEY_Escape,0,Gdk.ModifierType(0))
     assert w.tool_mode=='select'
 def remove():
@@ -94,7 +127,7 @@ def finish():
     w.on_highlight_clicked(None)
     w.on_remove_highlight_clicked(None)
     assert len(annotations())==2
-    print('View highlighting, glyph positions, color, drag highlighting, remove, undo/redo, and save passed',flush=True)
+    print('View highlighting, glyph positions, color, drag highlighting, eraser tool, remove, undo/redo, and save passed',flush=True)
 def run(callback):
     try: callback()
     except Exception as error:
@@ -103,7 +136,7 @@ def run(callback):
         errors.append(error)
         loop.quit()
     return False
-for delay,callback in ((600,highlight),(1000,undo),(1300,redo),(1600,drag_highlight),(1800,w._toggle_fullscreen),(2100,remove),(2500,finish)):
+for delay,callback in ((600,highlight),(1000,undo),(1300,redo),(1600,drag_highlight),(1700,erase_tool),(1800,w._toggle_fullscreen),(2100,remove),(2500,finish)):
     GLib.timeout_add(delay,run,callback)
 GLib.timeout_add(2900,lambda:(w.destroy(),loop.quit(),False)[2])
 loop.run()

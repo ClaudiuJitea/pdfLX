@@ -32,6 +32,12 @@ def apply_created():
     dialogs()[-1].response(Gtk.ResponseType.APPLY)
     assert tools.annotations(window.doc)[0]['content']=='First line\nSecond line'
     assert window.doc[0].load_annot(tools.annotations(window.doc)[0]['xref']).info['name']=='Comment'
+def click(x,y):
+    # A real click runs the press handler and a zero-length drag.
+    from unittest.mock import Mock
+    window.on_pdf_view_pressed(None,1,x,y)
+    window.on_drag_begin(Mock(),x,y)
+    window.on_drag_end(Mock(),0,0)
 def open_note():
     window.view_mode=True
     note=tools.annotations(window.doc)[0]
@@ -39,7 +45,7 @@ def open_note():
     center=fitz.Rect(note['rect']).tl+(9,9)
     x=center.x*window.zoom_level+max(0,(window.pdf_view.get_width()-window.current_pdf_page_width)/2)
     y=center.y*window.zoom_level+max(0,(window.pdf_view.get_height()-window.current_pdf_page_height)/2)
-    window.on_pdf_view_pressed(None,1,x,y)
+    click(x,y)
     bubble=window.document_tools.note_bubble
     assert bubble.get_has_arrow()
     assert not text_views(bubble)[0].get_editable()
@@ -58,7 +64,7 @@ def close_readonly():
     center=fitz.Rect(note['rect']).tl+(9,9)
     x=center.x*window.zoom_level+max(0,(window.pdf_view.get_width()-window.current_pdf_page_width)/2)
     y=center.y*window.zoom_level+max(0,(window.pdf_view.get_height()-window.current_pdf_page_height)/2)
-    window.on_pdf_view_pressed(None,1,x,y)
+    click(x,y)
     bubble=window.document_tools.note_bubble
     assert text_views(bubble)[0].get_editable()
     buffer=text_views(bubble)[0].get_buffer()
@@ -115,10 +121,11 @@ def forms_and_stamp():
     for action in editing_actions:
         assert not window.lookup_action(action).get_enabled(),action
     for button in (window.forms_tool_button,window.document_tools_button,
-                   window.rotate_page_cw_button,window.rotate_page_ccw_button,
-                   window.remove_highlight_button):
+                   window.rotate_page_cw_button,window.rotate_page_ccw_button):
         assert not button.get_sensitive()
     assert window.highlight_button.get_sensitive()
+    # The eraser is a tool, so it is usable before anything is selected.
+    assert window.remove_highlight_button.get_sensitive()
     assert window.select_tool_button.get_sensitive()
     assert window.drag_tool_button.get_sensitive()
     assert not window.shapes_tool_button.get_sensitive()

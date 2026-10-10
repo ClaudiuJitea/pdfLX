@@ -1,6 +1,6 @@
 import copy
 from typing import Optional, List, Dict, Tuple, Any
-from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, AddTableCommand, EditTableCommand, DocumentMutationCommand, DeleteObjectCommand, RotatePageCommand, RotateObjectCommand
+from .undo_manager import UndoManager, EditObjectCommand, AddObjectCommand, AddTableCommand, EditTableCommand, DocumentMutationCommand, DeleteObjectCommand, CompositeCommand, RotatePageCommand, RotateObjectCommand
 from .i18n import _, get_setting, set_setting
 
 import gi
@@ -42,6 +42,7 @@ from .table_dialog import TableDialog
 from .table_creation import create_table_objects, TableSelection
 from . import utils
 from . import text_geometry
+from . import highlight_tools
 from .document_tool_ui import DocumentToolsController
 from .form_ui import FormController
 from . import session_memory
@@ -1738,10 +1739,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
         rm_icon = "editor-erase-highlight-symbolic"
         self.remove_highlight_button = Gtk.Button.new_from_icon_name(rm_icon)
-        self.remove_highlight_button.set_tooltip_text(_("remove_highlight_tip"))
+        self.remove_highlight_button.set_tooltip_text(_("erase_highlight_tip"))
         self.remove_highlight_button.add_css_class("flat")
         _size_tool_btn(self.remove_highlight_button)
         self.remove_highlight_button.connect("clicked", self.on_remove_highlight_clicked)
+        self._tool_buttons["erase_highlight"] = self.remove_highlight_button
         self.tools_sidebar.append(self.remove_highlight_button)
 
         self.highlight_color_rgba = Gdk.RGBA()
@@ -2378,6 +2380,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 'select': 'tool_select', 'drag': 'tool_drag',
                 'add_text': 'tool_add_text', 'add_image': 'tool_add_image',
                 'pen': 'tool_pen', 'highlighter': 'tool_highlighter',
+                'erase_highlight': 'tool_erase_highlight',
                 'signature': 'signature_add',
                 'form_create': 'tool_create_field', 'form_reposition': 'form_redraw_bounds',
                 'add_rectangle': 'tool_rectangle', 'add_ellipse': 'tool_ellipse',
@@ -2392,19 +2395,14 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.toolbar_hint.set_text(_("toolbar_select_hint") if self.tool_mode == 'select' else
                                        _("toolbar_drag_hint") if self.tool_mode == 'drag' else
                                        _("toolbar_image_hint") if self.tool_mode == 'add_image' else
+                               _("toolbar_erase_highlight_hint") if self.tool_mode == 'erase_highlight' else
                                        _("signature_click_hint") if self.tool_mode == "signature" else "")
             self.toolbar_hint.set_visible(not active_controls and bool(self.toolbar_hint.get_text()))
 
-        can_highlight = False
-        if self.view_mode:
-            can_highlight = self.view_sel_rect is not None
-        else:
-            can_highlight = self.selected_text is not None
-            
         if hasattr(self, 'highlight_button'):
             self.highlight_button.set_sensitive(can_edit and has_doc)
         if hasattr(self, 'remove_highlight_button'):
-            self.remove_highlight_button.set_sensitive(can_edit and has_doc and can_highlight)
+            self.remove_highlight_button.set_sensitive(can_edit and has_doc)
         if hasattr(self, 'highlight_color_button'):
             self.highlight_color_button.set_sensitive(can_edit and has_doc)
 
@@ -3427,6 +3425,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                         cr.line_to(*point)
                     cr.close_path()
                     cr.fill()
+            cr.restore()
+
+        if getattr(self, '_erase_drag', None):
+            (sx, sy), (ex, ey) = self._erase_drag
+            corners = [self._visual_to_unrotated_page_coords(x, y) for x, y in ((sx, sy), (ex, sy), (ex, ey), (sx, ey))]
+            cr.save()
+            cr.move_to(*corners[0])
+            for corner in corners[1:]:
+                cr.line_to(*corner)
+            cr.close_path()
+            cr.set_source_rgba(0.88, 0.11, 0.14, 0.12)
+            cr.fill_preserve()
+            cr.set_source_rgba(0.88, 0.11, 0.14, 0.85)
+            cr.set_line_width(1.5 / self.zoom_level)
+            cr.set_dash([4.0 / self.zoom_level, 3.0 / self.zoom_level])
+            cr.stroke()
             cr.restore()
 
         selected_obj = getattr(self, 'selected_table', None) or self.selected_text or self.selected_image or self.selected_shape or self.selected_stroke
@@ -5090,14 +5104,18 @@ class PdfEditorWindow(Adw.ApplicationWindow):
 
     def _update_cursor_for_tool(self):
         """Restore cursor based on active tool mode."""
-        if self.tool_mode == 'drag':
+        if self.tool_mode == 'erase_highlight':
+            self.pdf_view.set_cursor(highlight_tools.eraser_cursor())
+        elif self.tool_mode == 'highlighter':
+            self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
+        elif self.tool_mode == 'drag':
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name('grab'))
         elif getattr(self, 'view_mode', False):
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("text"))
         elif self.tool_mode == "select":
             self.pdf_view.set_cursor(None)
         elif self.tool_mode in ("add_text", "add_ellipse", "add_rectangle", "add_checkmark", "add_cross", "pen", "highlighter",
-                                "add_shape", "add_line"):
+                                "add_shape", "add_line", "erase_highlight"):
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("crosshair"))
         elif self.tool_mode in ("add_image", "signature"):
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name("cell"))
@@ -5120,7 +5138,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if self.tool_mode == 'drag':
             self.pdf_view.set_cursor(Gdk.Cursor.new_from_name('grabbing' if getattr(self, '_pan_start', None) else 'grab'))
             return
-        if hasattr(self,'stamp_interaction') and self.stamp_interaction.editable() and self.tool_mode in ('select','drag','stamp'):
+        if self.tool_mode == 'erase_highlight':
+            self.pdf_view.set_cursor(highlight_tools.eraser_cursor())
+            return
+        if hasattr(self,'stamp_interaction') and self.doc and self.tool_mode in ('select','stamp'):
             page_x=(x-max(0,(self.pdf_view.get_width()-self.current_pdf_page_width)/2))/self.zoom_level
             page_y=(y-max(0,(self.pdf_view.get_height()-self.current_pdf_page_height)/2))/self.zoom_level
             handle=(self.stamp_interaction.drag or {}).get('handle') or self.stamp_interaction.handle_at(page_x,page_y)
@@ -5128,9 +5149,11 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 cursor='crosshair' if handle=='rotate' else ('nwse-resize' if handle in ('nw','se') else 'nesw-resize')
                 self.pdf_view.set_cursor(Gdk.Cursor.new_from_name(cursor))
                 return
-            if self.stamp_interaction.drag or self.stamp_interaction.hit(page_x,page_y):
+            if self.stamp_interaction.drag or self.stamp_interaction.hit_note(page_x,page_y):
                 self.pdf_view.set_cursor(Gdk.Cursor.new_from_name('grabbing' if self.stamp_interaction.drag else 'grab'))
                 return
+            if self.view_mode:
+                self._update_cursor_for_tool()
         if not getattr(self, 'view_mode', False) and not getattr(self, 'dragged_object', None):
             selected_obj = getattr(self, 'selected_table', None) or self.selected_text or self.selected_image or self.selected_shape or getattr(self, 'selected_stroke', None)
             if selected_obj:
@@ -5764,6 +5787,9 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             if gesture:gesture.set_state(Gtk.EventSequenceState.CLAIMED)
             self.pdf_view.queue_draw()
             return
+        if self.tool_mode == 'erase_highlight' or (self.view_mode and self.tool_mode == 'highlighter'):
+            # Clicks and drags are resolved by the drag gesture.
+            return
         if self.tool_mode == 'sticky_note' and not self.view_mode:
             self.document_tools.place_note(page_x_unzoomed,page_y_unzoomed)
             return
@@ -5786,6 +5812,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.stamp_interaction.select(note)
                     if n_press==2:
                         self.document_tools.stamp(note)
+                elif (self.tool_mode=='select' and hasattr(self,'stamp_interaction')
+                      and self.stamp_interaction.movable(note)):
+                    # The drag gesture moves the note, or opens it on a plain click.
+                    self.stamp_interaction.select(note)
                 else:
                     self.document_tools.open_note_bubble(note)
                 return
@@ -6368,7 +6398,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._update_ui_state()
                 return True
             if keyval == Gdk.KEY_Escape:
-                if self.tool_mode in ('highlighter', 'drag'):
+                if self.tool_mode in ('highlighter', 'drag', 'erase_highlight'):
                     self.on_tool_selected(None,'select')
                 self.view_sel_rect = None
                 self.view_sel_start = None
@@ -6439,7 +6469,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                  self.pdf_view.queue_draw()
                  self._update_ui_state()
                  return True
-            elif self.tool_mode in ("add_text", "pen", "highlighter", "signature"):
+            elif self.tool_mode in ("add_text", "pen", "highlighter", "signature", "erase_highlight"):
                  self.on_tool_selected(None, "select")
                  return True
 
@@ -6584,6 +6614,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         placement=getattr(self,'_certificate_placement',None)
         if placement and tool_name!='certificate_signature':placement.cancel(False)
         self._pan_start = None
+        self._erase_drag = None
         self._cancel_table_drag()
         if hasattr(self,"stamp_interaction"):
             self.stamp_interaction.cancel()
@@ -6620,6 +6651,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.shape_tools.sync_shape(None)
         if hasattr(self, 'form_tools'):
             self.form_tools.builder.sync_tool()
+        self._update_cursor_for_tool()
 
     def on_drag_begin(self, gesture, start_x, start_y):
         """Initiate canvas drag gesture for selection, movement, resizing, or freehand drawing."""
@@ -6668,6 +6700,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self._form_drag_active=True
                 gesture.set_state(Gtk.EventSequenceState.CLAIMED)
                 return
+        if self.tool_mode == 'erase_highlight':
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            self._erase_drag = [(page_x, page_y), (page_x, page_y)]
+            return
+        if self.view_mode and self.tool_mode == 'select' and self.stamp_interaction.begin(page_x, page_y):
+            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+            return
+        if self.view_mode and self.tool_mode == 'highlighter':
+            if getattr(self._active_session, 'can_edit', True):
+                self._begin_highlighter_stroke(gesture, page_x, page_y)
+            return
         if self.view_mode:
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
             self.view_drag_active = True
@@ -6751,26 +6794,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         unrot_px, unrot_py = self._visual_to_unrotated_page_coords(page_x, page_y)
 
         if self.tool_mode in ("pen", "highlighter"):
-            self.selected_stroke = None
-            self.selected_text = None
-            self.selected_image = None
-            self.selected_shape = None
-            gesture.set_state(Gtk.EventSequenceState.CLAIMED)
-            self.dragging_to_create = True
-            self.drag_start_page_pos = (unrot_px, unrot_py)
-            color = self.pen_color if self.tool_mode == "pen" else self.highlighter_color
-            width = self.pen_width if self.tool_mode == "pen" else self.highlighter_width
-            opacity = 1.0 if self.tool_mode == "pen" else self.highlighter_opacity
-            self.temp_stroke = EditableStroke(
-                points=[(unrot_px, unrot_py)],
-                stroke_color=color,
-                stroke_width=width,
-                opacity=opacity,
-                tool_type=self.tool_mode,
-                page_number=self.current_page_index,
-                is_new=True
-            )
-            self.pdf_view.queue_draw()
+            self._begin_highlighter_stroke(gesture, page_x, page_y)
             return
         elif self.tool_mode == "add_shape":
             gesture.set_state(Gtk.EventSequenceState.CLAIMED)
@@ -6882,6 +6906,30 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         else:
             gesture.set_state(Gtk.EventSequenceState.DENIED)
 
+    def _begin_highlighter_stroke(self, gesture, page_x, page_y):
+        """Start a freehand pen or highlighter stroke at a visual page point."""
+        unrot_px, unrot_py = self._visual_to_unrotated_page_coords(page_x, page_y)
+        self.selected_stroke = None
+        self.selected_text = None
+        self.selected_image = None
+        self.selected_shape = None
+        gesture.set_state(Gtk.EventSequenceState.CLAIMED)
+        self.dragging_to_create = True
+        self.drag_start_page_pos = (unrot_px, unrot_py)
+        color = self.pen_color if self.tool_mode == "pen" else self.highlighter_color
+        width = self.pen_width if self.tool_mode == "pen" else self.highlighter_width
+        opacity = 1.0 if self.tool_mode == "pen" else self.highlighter_opacity
+        self.temp_stroke = EditableStroke(
+            points=[(unrot_px, unrot_py)],
+            stroke_color=color,
+            stroke_width=width,
+            opacity=opacity,
+            tool_type=self.tool_mode,
+            page_number=self.current_page_index,
+            is_new=True
+        )
+        self.pdf_view.queue_draw()
+
     def on_drag_update(self, gesture, offset_x, offset_y):
         """Update canvas interaction during drag (move/resize objects, text select, or draw strokes)."""
         if getattr(self,'_form_handle_drag',False):
@@ -6913,6 +6961,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             return
         if hasattr(self,'stamp_interaction') and self.stamp_interaction.drag:
             self.stamp_interaction.update(offset_x/self.zoom_level,offset_y/self.zoom_level)
+            return
+        if getattr(self, '_erase_drag', None):
+            (sx, sy), _end = self._erase_drag
+            self._erase_drag[1] = (sx + offset_x / self.zoom_level, sy + offset_y / self.zoom_level)
+            self.pdf_view.queue_draw()
+            return
+        if self.view_mode and self.dragging_to_create and getattr(self, 'temp_stroke', None) is not None:
+            delta_x, delta_y = self._visual_to_unrotated_delta(offset_x / self.zoom_level, offset_y / self.zoom_level)
+            start_x, start_y = self.drag_start_page_pos
+            self.temp_stroke.add_point(start_x + delta_x, start_y + delta_y)
+            self.pdf_view.queue_draw()
             return
         if self.view_mode:
             if self.view_sel_start and self.view_drag_active:
@@ -7239,12 +7298,22 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         if hasattr(self,'stamp_interaction') and self.stamp_interaction.drag:
             self.stamp_interaction.end(offset_x/self.zoom_level,offset_y/self.zoom_level)
             return
-        if self.view_mode:
-            if self.view_drag_active and (abs(offset_x)>2 or abs(offset_y)>2):
+        moved = abs(offset_x) > 2 or abs(offset_y) > 2
+        if getattr(self, '_erase_drag', None):
+            (sx, sy), (ex, ey) = self._erase_drag
+            self._erase_drag = None
+            if moved:
+                # A small margin lets a straight sweep along a line act like a brush.
+                rect = fitz.Rect(sx, sy, ex, ey).normalize() + (-1.5, -1.5, 1.5, 1.5)
+                self._erase_highlights([rect * self.doc[self.current_page_index].derotation_matrix])
+            else:
+                self._delete_highlight_at(sx, sy)
+            self.pdf_view.queue_draw()
+            return
+        if self.view_mode and not self.dragging_to_create:
+            if self.view_drag_active and moved:
                 self.on_drag_update(gesture,offset_x,offset_y)
             self.view_drag_active=False
-            if self.tool_mode=='highlighter' and self.view_selected_text:
-                self.on_highlight_clicked(None)
             self._update_ui_state()
             self.pdf_view.queue_draw()
             return
@@ -7743,9 +7812,7 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     if not quads:
                         quads = [rect.quad]
                 page = self.doc[self.current_page_index]
-                annot = page.add_highlight_annot(quads)
-                annot.set_colors(stroke=color)
-                annot.update()
+                highlight_tools.add(page, quads, color, self.highlighter_opacity)
                 self.doc._reset_page_refs()
             success = self._mutate_document(add_highlight,allow_view=True)
             err = ''
@@ -7770,26 +7837,181 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                 self.on_tool_selected(None,"highlighter")
 
     def on_remove_highlight_clicked(self, button):
-        """Remove highlight annotations overlapping current selection."""
+        """Erase highlights under the text selection, or toggle the highlight eraser tool."""
         if not self.doc or not getattr(self._active_session,'can_edit',True):
             return
-        target_rect = None
-        is_visual = False
-        if self.view_mode and self.view_sel_rect:
-            target_rect = self.view_sel_rect
-            is_visual = True
-        elif not self.view_mode and self.selected_text and self.selected_text.bbox:
-            if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char'):
-                target_rect = text_geometry.selection_bounds(
-                    self.doc, self.selected_text, self.selected_word_start_char, self.selected_word_end_char)
-            else:
-                target_rect = self.selected_text.bbox
-            is_visual = False
-            
-        if not target_rect:
+        rects = self._highlight_selection_rects()
+        if rects and self._highlights_overlap(rects):
+            self._erase_highlights(rects)
+            self._clear_view_selection()
+        elif self.tool_mode == "erase_highlight":
+            self.on_tool_selected(None, "select")
+        else:
+            self.on_tool_selected(None, "erase_highlight")
+
+    def _highlight_selection_rects(self):
+        """Native page rectangles covered by the current text selection."""
+        if not self.doc:
+            return []
+        page = self.doc[self.current_page_index]
+        if self.view_mode:
+            quads = getattr(self._active_session, 'view_selection_quads', None) or []
+            if quads:
+                return [(quad * page.derotation_matrix).rect for quad in quads]
+            if self.view_sel_rect:
+                return [fitz.Rect(self.view_sel_rect) * page.derotation_matrix]
+            return []
+        text = self.selected_text
+        if not text or not text.bbox:
+            return []
+        if getattr(self, 'word_selection_mode', False) and hasattr(self, 'selected_word_start_char'):
+            quads = text_geometry.selection_quads(
+                self.doc, text, self.selected_word_start_char, self.selected_word_end_char)
+            if quads:
+                return [quad.rect for quad in quads]
+        return [fitz.Rect(text.bbox)]
+
+    def _clear_view_selection(self):
+        if self.view_mode:
+            self.view_sel_start = None
+            self.view_sel_rect = None
+            self.view_selected_text = ""
+            self._active_session.view_selection_quads = []
+            self._update_ui_state()
+            self.pdf_view.queue_draw()
+
+    def _highlight_strokes(self):
+        """Freehand highlighter strokes on the current page, topmost first."""
+        return [stroke for stroke in reversed(getattr(self, 'editable_strokes', []))
+                if stroke.page_number == self.current_page_index and stroke.points
+                and getattr(stroke, 'tool_type', None) == EditableStroke.TOOL_HIGHLIGHTER]
+
+    def _stroke_split(self, stroke, rects):
+        if getattr(stroke, 'rotation', 0.0) % 360.0:
+            # Rotated strokes are erased whole when touched.
+            bbox = fitz.Rect(stroke.bbox)
+            return [] if any(bbox.intersects(rect) for rect in rects) else None
+        reach = stroke.stroke_width / 2.0
+        return highlight_tools.split_stroke(stroke.points, [fitz.Rect(rect) + (0, -reach, 0, reach) for rect in rects])
+
+    def _highlights_overlap(self, rects):
+        return (highlight_tools.overlaps(self.doc, self.current_page_index, rects)
+                or any(self._stroke_split(stroke, rects) is not None for stroke in self._highlight_strokes()))
+
+    def _run_object_commands(self, commands):
+        command = CompositeCommand(self, commands)
+        command.execute()
+        self.undo_manager.add_command(command)
+        self.selected_stroke = None
+        self.document_modified = True
+        self._refresh_thumbnail(self.current_page_index)
+        self._update_ui_state()
+        self.pdf_view.queue_draw()
+
+    def _erase_highlight_strokes(self, rects):
+        """Erase the parts of freehand highlighter strokes under ``rects``."""
+        commands = []
+        for stroke in self._highlight_strokes():
+            runs = self._stroke_split(stroke, rects)
+            if runs is None:
+                continue
+            commands.append(DeleteObjectCommand(self, stroke))
+            for run in runs:
+                piece = copy.deepcopy(stroke)
+                piece.points = run
+                piece.is_new = True
+                piece.is_baked = True
+                piece._ghost_redacted = False
+                piece.recalculate_bbox()
+                piece.original_bbox = None
+                commands.append(AddObjectCommand(self, piece))
+        if commands:
+            self._run_object_commands(commands)
+        return sum(isinstance(command, DeleteObjectCommand) for command in commands)
+
+    def _erase_highlights(self, rects):
+        """Undoably erase highlighted areas under native ``rects``."""
+        if not self.doc or not rects:
+            return 0
+        page = self.current_page_index
+        removed = self._erase_highlight_strokes(rects)
+        # Skip no-op mutations so they do not create empty undo steps.
+        if highlight_tools.overlaps(self.doc, page, rects):
+            counts = []
+            if self._mutate_document(lambda: counts.append(highlight_tools.erase(self.doc, page, rects)),
+                                     allow_view=True):
+                removed += counts[-1]
+        self.status_label.set_text(_("highlight_erased") if removed else _("highlight_none_here"))
+        return removed
+
+    def _delete_highlight_at(self, page_x, page_y):
+        """Delete the whole highlight under a visual page point."""
+        point = fitz.Point(page_x, page_y) * self.doc[self.current_page_index].derotation_matrix
+        for stroke in self._highlight_strokes():
+            if highlight_tools.stroke_hit(stroke.points, stroke.stroke_width, point):
+                self._run_object_commands([DeleteObjectCommand(self, stroke)])
+                self.status_label.set_text(_("highlight_erased"))
+                return True
+        hit = highlight_tools.highlight_at(self.doc, self.current_page_index, point)
+        if not hit:
+            self.status_label.set_text(_("highlight_none_here"))
+            return False
+        page = self.current_page_index
+        if self._mutate_document(lambda: highlight_tools.delete(self.doc, page, hit['xref']), allow_view=True):
+            self.status_label.set_text(_("highlight_erased", 1))
+            return True
+        return False
+
+    def _recolor_highlight(self, xref, color):
+        page = self.current_page_index
+        self._mutate_document(lambda: highlight_tools.recolor(self.doc, page, xref, color), allow_view=True)
+
+    def _append_highlight_menu(self, box, add, page_x, page_y, include_highlight=True, include_delete=True):
+        """Shared highlight section of the view and edit context menus.
+
+        ``add(label_key, callback)`` appends a menu button and returns it.
+        """
+        can_edit = getattr(self._active_session, 'can_edit', True)
+        rects = self._highlight_selection_rects()
+        if include_highlight:
+            add("menu_highlight", lambda: self.on_highlight_clicked(None)).set_sensitive(can_edit and bool(rects))
+        if rects:
+            def erase_selection():
+                self._erase_highlights(self._highlight_selection_rects())
+                self._clear_view_selection()
+            erase = add("remove_highlight_tip", erase_selection)
+            erase.set_sensitive(can_edit and self._highlights_overlap(rects))
+        point = fitz.Point(page_x, page_y) * self.doc[self.current_page_index].derotation_matrix
+        hit = highlight_tools.highlight_at(self.doc, self.current_page_index, point)
+        if not hit or not can_edit:
             return
-            
-        self._remove_highlight_at_region(target_rect, is_visual=is_visual)
+        box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        row = Gtk.Box(spacing=4, halign=Gtk.Align.CENTER)
+        for color in highlight_tools.COLORS:
+            area = Gtk.DrawingArea(content_width=18, content_height=18)
+            def draw(_area, cr, width, height, color=color):
+                cr.set_source_rgb(*color)
+                cr.arc(width / 2, height / 2, min(width, height) / 2 - 1, 0, 2 * math.pi)
+                cr.fill_preserve()
+                cr.set_source_rgba(0, 0, 0, 0.35)
+                cr.set_line_width(1)
+                cr.stroke()
+            area.set_draw_func(draw)
+            swatch = Gtk.Button(child=area, tooltip_text=_("highlight_color_tip"))
+            swatch.add_css_class('flat')
+            swatch.add_css_class('circular')
+            if all(abs(a - b) < 0.02 for a, b in zip(color, hit['color'])):
+                swatch.add_css_class('suggested-action')
+            def pick(_button, color=color):
+                popover = getattr(self, 'context_popover', None)
+                if popover:
+                    popover.popdown()
+                self._recolor_highlight(hit['xref'], color)
+            swatch.connect('clicked', pick)
+            row.append(swatch)
+        box.append(row)
+        if include_delete:
+            add("highlight_delete", lambda: self._delete_highlight_at(page_x, page_y))
 
     def _extract_word_at_position(self, text, click_pos_in_text):
         """Extract contiguous non-whitespace word and its character indices at cursor."""
@@ -7898,7 +8120,10 @@ class PdfEditorWindow(Adw.ApplicationWindow):
                     self.view_selected_text = clicked_word['text']
                     self.pdf_view.queue_draw()
                 else:
-                    return
+                    point = fitz.Point(page_x, page_y) * self.doc[self.current_page_index].derotation_matrix
+                    if not highlight_tools.highlight_at(self.doc, self.current_page_index, point):
+                        return
+                    self._clear_view_selection()
             
             if ctrl_pressed and self.view_selected_text:
                 import webbrowser
@@ -7917,14 +8142,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             btn_copy.connect("clicked", lambda b: self._handle_context_action("copy_view", None, x, y))
             popover_box.append(btn_copy)
             
-            btn_hl = Gtk.Button(label=_("menu_highlight"))
-            btn_hl.set_sensitive(getattr(self._active_session,'can_edit',True))
-            btn_hl.connect("clicked", lambda b: self._handle_context_action("highlight_view", None, x, y))
-            popover_box.append(btn_hl)
-            remove=Gtk.Button(label=_("remove_highlight_tip"))
-            remove.set_sensitive(getattr(self._active_session,'can_edit',True))
-            remove.connect('clicked',lambda b:self._handle_context_action('remove_highlight_view',None,x,y))
-            popover_box.append(remove)
+            def add(label, callback):
+                button = Gtk.Button(label=_(label))
+                def activate(_button):
+                    popover = getattr(self, 'context_popover', None)
+                    if popover:
+                        popover.popdown()
+                    callback()
+                button.connect("clicked", activate)
+                popover_box.append(button)
+                return button
+            self._append_highlight_menu(popover_box, add, page_x, page_y)
 
             popover=getattr(self,'context_popover',None)
             if popover and popover.get_parent() is self.pdf_view:
@@ -8133,12 +8361,15 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         elif action == "highlight_view":
             self.on_highlight_clicked(None)
         elif action == "remove_highlight_view":
-            self.on_remove_highlight_clicked(None)
+            self._erase_highlights(self._highlight_selection_rects())
+            self._clear_view_selection()
         elif action == "highlight_edit":
             self.on_highlight_clicked(None)
         elif action == "remove_highlight":
-            if obj and hasattr(obj, 'bbox'):
-                self._remove_highlight_at_region(obj.bbox)
+            rects = self._highlight_selection_rects() if obj is self.selected_text else []
+            if not rects and obj and getattr(obj, 'bbox', None):
+                rects = [fitz.Rect(obj.bbox)]
+            self._erase_highlights(rects)
         elif action == "paste_new_text":
             page_x, page_y = obj
             clipboard = self.get_clipboard()
@@ -8324,15 +8555,6 @@ class PdfEditorWindow(Adw.ApplicationWindow):
             self.pdf_view.queue_draw()
             self.status_label.set_text(_("object_deleted"))
 
-    def _remove_highlight_at_region(self, bbox, is_visual=False):
-        if not self.doc:
-            return
-        def remove():
-            success, error = pdf_handler.remove_highlight_annotations(
-                self.doc,self.current_page_index,bbox,is_visual=is_visual)
-            if not success:
-                raise ValueError(error)
-        self._mutate_document(remove,allow_view=True)
 
     def _create_text_from_paste(self, page_x, page_y, text):
         """Create text from paste."""

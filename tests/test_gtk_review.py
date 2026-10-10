@@ -52,6 +52,20 @@ class GtkReviewTests(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
         self.assertIn('undo/redo, and save passed',result.stdout)
 
+    def test_highlight_eraser_on_freehand_strokes(self):
+        root=Path(__file__).resolve().parents[1]
+        result=subprocess.run([sys.executable,str(root/'tests/ui_highlight_eraser_smoke.py')],
+                              cwd=root,env=_environment(root),capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
+        self.assertIn('eraser cursor passed',result.stdout)
+
+    def test_sticky_notes_move_in_edit_and_view_mode(self):
+        root=Path(__file__).resolve().parents[1]
+        result=subprocess.run([sys.executable,str(root/'tests/ui_note_move_smoke.py')],
+                              cwd=root,env=_environment(root),capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
+        self.assertIn('open on click passed',result.stdout)
+
     def test_view_mode_text_selection_and_clipboard(self):
         root=Path(__file__).resolve().parents[1]
         environment=_environment(root)

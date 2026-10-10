@@ -133,6 +133,9 @@ def add_review(doc, page_number, kind, rect, content='', author='', quads=None, 
     annot.update()
     if kind == 'note':
         set_note_appearance(doc, annot)
+    elif kind == 'highlight':
+        from .highlight_tools import style
+        style(doc, annot)
     xref = annot.xref
     doc._reset_page_refs()
     return xref
@@ -190,6 +193,32 @@ def expand_stamp_fields(text,author=''):
     for key,value in values.items():
         text=text.replace('{'+key+'}',value)
     return text
+
+
+STAMP_TEXT_LIMIT=40
+STAMP_DETAILS_LIMIT=48
+STAMP_LINE_SPACING=1.05
+
+
+def stamp_lines(font,text,box,limit):
+    """Lay stamp text out on one or two lines, whichever allows larger type.
+
+    Returns the lines and the font size that fits them in ``box``.
+    """
+    height=max(font.ascender-font.descender,1e-6)
+    def size_for(lines):
+        widest=max(font.text_length(line,fontsize=1) for line in lines)
+        return min(limit,box.width/max(widest,1e-6),
+                   box.height/(height*(1 if len(lines)==1 else 2*STAMP_LINE_SPACING)))
+    best=[text],size_for([text])
+    words=text.split()
+    for cut in range(1,len(words)):
+        lines=[' '.join(words[:cut]),' '.join(words[cut:])]
+        size=size_for(lines)
+        # Prefer one line unless wrapping gives clearly larger type.
+        if size>best[1]*(1.15 if len(best[0])==1 else 1):
+            best=lines,size
+    return best
 
 
 def place_stamp(doc,page_number,point,stamp='Approved',width=160,author='',style=None):
@@ -272,7 +301,7 @@ def place_stamp(doc,page_number,point,stamp='Approved',width=160,author='',style
         def fit(face,text,box,limit):
             return min(limit,box.width/max(face.text_length(text,fontsize=1),1e-6),
                        box.height/max(face.ascender-face.descender,1))
-        size=fit(font,label,text_box,fontsize)
+        lines,size=stamp_lines(font,label,text_box,fontsize)
         if size<3:
             raise ValueError('The stamp text is too long for this width.')
         with fitz.open() as layer:
@@ -283,7 +312,15 @@ def place_stamp(doc,page_number,point,stamp='Approved',width=160,author='',style
                 text_width=face.text_length(text,fontsize=text_size)
                 baseline=(box.y0+box.y1+text_size*(face.ascender+face.descender))/2
                 canvas.insert_text(((box.x0+box.x1-text_width)/2,baseline),text,fontsize=text_size,color=color,**args)
-            write(font,font_args,label,text_box,size)
+            if len(lines)==1:
+                write(font,font_args,label,text_box,size)
+            else:
+                # Two lines share the box, centred around its middle.
+                step=size*STAMP_LINE_SPACING*(font.ascender-font.descender)
+                middle=(text_box.y0+text_box.y1)/2
+                for index,line in enumerate(lines):
+                    centre=middle+(index-0.5)*step
+                    write(font,font_args,line,fitz.Rect(text_box.x0,centre-step/2,text_box.x1,centre+step/2),size)
             if details:
                 detail_size=fit(detail_font,details,detail_box,max(size*0.45,5))
                 if detail_size<2.5:
@@ -326,8 +363,9 @@ def _transform_stamp(doc,page_number,xref,visual_rect,preserve_size):
     if not target.is_valid or target.is_empty or target not in page.rect:
         raise ValueError('The stamp must fit inside the visible page.')
     annot=page.load_annot(xref)
-    if annot.type[0]!=fitz.PDF_ANNOT_STAMP:
-        raise ValueError('Select a stamp to move.')
+    movable=(fitz.PDF_ANNOT_STAMP,fitz.PDF_ANNOT_TEXT) if preserve_size else (fitz.PDF_ANNOT_STAMP,)
+    if annot.type[0] not in movable:
+        raise ValueError('Select a stamp or note to move.')
     original=annot.rect*page.rotation_matrix
     if preserve_size and (abs(target.width-original.width)>0.01 or abs(target.height-original.height)>0.01):
         raise ValueError('Moving a stamp must preserve its size.')

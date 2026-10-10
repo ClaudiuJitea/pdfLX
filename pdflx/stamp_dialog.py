@@ -217,7 +217,9 @@ class StampDialog(SheetDialog):
         self.text_row = Adw.EntryRow(title=_("tool_stamp_text"))
         self.text_row.set_text(initial.get('text', 'APPROVED'))
         group.add(self.text_row)
+        self.text_row.get_delegate().set_max_length(tools.STAMP_TEXT_LIMIT)
         self.details_row = Adw.EntryRow(title=_("stamp_details"))
+        self.details_row.get_delegate().set_max_length(tools.STAMP_DETAILS_LIMIT)
         self.details_row.set_text(initial.get('details', '') or '')
         insert = Gtk.MenuButton(icon_name='list-add-symbolic', tooltip_text=_("stamp_insert_field"),
                                 valign=Gtk.Align.CENTER)

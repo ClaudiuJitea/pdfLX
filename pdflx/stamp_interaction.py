@@ -1,4 +1,7 @@
-"""Select, move, and proportionally resize native stamps with a drag preview."""
+"""Select, move, and proportionally resize native stamps with a drag preview.
+
+Sticky notes use the same interaction for moving only, also in view mode.
+"""
 import pymupdf as fitz
 import math
 from . import document_tools as tools, pdf_handler
@@ -16,6 +19,19 @@ class StampInteraction:
         window = self.window
         return bool(window.doc and not window.view_mode and window._active_session.can_edit)
 
+    def movable(self, note):
+        window = self.window
+        if not (window.doc and window._active_session.can_edit and note):
+            return False
+        return note['kind'] == 'Text' or (note['kind'] == 'Stamp' and not window.view_mode)
+
+    def hit_note(self, x, y):
+        """Movable stamp or sticky note under a visual page point."""
+        window = self.window
+        native = fitz.Point(x, y) * window.doc[window.current_page_index].derotation_matrix
+        note = tools.note_at_point(window.doc, window.current_page_index, native, include_stamps=True)
+        return note if self.movable(note) else None
+
     def hit(self, x, y):
         window = self.window
         native = fitz.Point(x, y) * window.doc[window.current_page_index].derotation_matrix
@@ -30,7 +46,7 @@ class StampInteraction:
         window.pdf_view.queue_draw()
 
     def handle_at(self, x, y):
-        if not self.selected or not self.editable():
+        if not self.selected or not self.editable() or self.selected['kind'] != 'Stamp':
             return None
         note = self.selected
         if note['page'] != self.window.current_page_index:
@@ -46,17 +62,16 @@ class StampInteraction:
         return None
 
     def begin(self, x, y):
-        if not self.editable():
-            return False
         handle = self.handle_at(x, y)
-        note = self.selected if handle else self.hit(x, y)
-        if not note:
+        note = self.selected if handle else self.hit_note(x, y)
+        if not self.movable(note):
             return False
         self.select(note)
         window = self.window
         bounds = fitz.Rect(note['rect']) * window.doc[note['page']].rotation_matrix
         self.drag = dict(source=window.doc, note=note, original=bounds, target=bounds, handle=handle,
-                         start=fitz.Point(x,y), angle=tilt_info(window.doc,note['xref']))
+                         start=fitz.Point(x,y),
+                         angle=tilt_info(window.doc,note['xref']) if note['kind'] == 'Stamp' else 0)
         return True
 
     def update(self, dx, dy):
@@ -64,7 +79,8 @@ class StampInteraction:
             return
         window = self.window
         state = self.drag
-        if not self.editable() or window.doc is not state['source'] or window.current_page_index != state['note']['page']:
+        if (not self.movable(state['note']) or window.doc is not state['source']
+                or window.current_page_index != state['note']['page']):
             self.cancel()
             return
         bounds = state['original']
@@ -125,6 +141,9 @@ class StampInteraction:
                    if state['handle']=='rotate' else state['target']==state['original'])
         if unchanged:
             self.select(state['note'])
+            if state['note']['kind'] == 'Text':
+                # A click without movement opens the note.
+                self.window.document_tools.open_note_bubble(state['note'])
             return
         note = state['note']
         if state['handle']=='rotate':
@@ -134,7 +153,7 @@ class StampInteraction:
             mutation = lambda: transform(state['source'], note['page'], note['xref'], state['target'])
         success = self.window._mutate_document(
             mutation,
-            page_num=note['page'])
+            page_num=note['page'], allow_view=note['kind'] == 'Text')
         if success:
             page = state['source'][note['page']]
             self.select(dict(note, rect=tuple(page.load_annot(note['xref']).rect)))
@@ -149,7 +168,7 @@ class StampInteraction:
         self.window.pdf_view.queue_draw()
 
     def draw(self, cr):
-        if not self.selected or not self.editable():
+        if not self.selected or not self.movable(self.selected):
             return
         note = self.selected
         if note['page'] != self.window.current_page_index:
@@ -162,6 +181,10 @@ class StampInteraction:
         cr.set_line_width(1.5 / self.window.zoom_level)
         cr.rectangle(rect.x0, rect.y0, rect.width, rect.height)
         cr.stroke()
+        if note['kind'] != 'Stamp':
+            # Notes keep a fixed icon size: no resize or rotate handles.
+            cr.restore()
+            return
         size = 8 / self.window.zoom_level
         for point in (rect.tl, rect.tr, rect.br, rect.bl):
             cr.rectangle(point.x - size / 2, point.y - size / 2, size, size)

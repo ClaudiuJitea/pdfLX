@@ -86,6 +86,9 @@ class ElementMenu:
         if field: return 'field',field
         page=self.source[self.page]
         for annot in reversed(list(page.annots() or ())):
+            # Highlighted text keeps its text menu, which includes the highlight actions.
+            if annot.type[0]==fitz.PDF_ANNOT_HIGHLIGHT and w._find_text_at_pos(x,y):
+                continue
             if native in annot.rect:
                 return 'annotation',dict(page=self.page,xref=annot.xref,kind=annot.type[1],
                     content=annot.info.get('content',''),author=annot.info.get('title',''),rect=tuple(annot.rect))
@@ -146,8 +149,12 @@ class ElementMenu:
             button('menu_edit_text',lambda _kind,text:w._show_inline_editor(text))
             copy_button=button('btn_copy',lambda _kind,text:w.get_clipboard().set(text.text))
             copy_button.set_sensitive(w._active_session.can_copy)
-            button('menu_highlight',lambda _kind,text:w._handle_context_action('highlight_edit',text,x,y))
-            button('menu_remove_highlight',lambda _kind,text:w._handle_context_action('remove_highlight',text,x,y))
+            w._append_highlight_menu(box,lambda label,callback:button(label,lambda _kind,_obj:callback()),px,py)
+            box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
+        if kind=='annotation' and obj['kind']=='Highlight':
+            w._append_highlight_menu(box,lambda label,callback:button(label,lambda _kind,_obj:callback()),px,py,
+                                     include_highlight=False,include_delete=False)
+            box.append(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL))
         if kind=='object' and isinstance(obj,EditableImage):
             button('Edit Image…', self.image_editor)
         if kind=='table':

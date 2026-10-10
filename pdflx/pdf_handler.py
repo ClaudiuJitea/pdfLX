@@ -2015,16 +2015,15 @@ def add_highlight_annotation(doc, page_index, rect_unzoomed, color=(1, 0.93, 0),
             r = (r * (~page.rotation_matrix)).normalize()
         if r.is_empty or not r.is_valid:
             return False, "Empty or invalid rect."
+        from . import highlight_tools
         rot = float(rotation) % 360.0
         if rot != 0.0:
             cx = (r.x0 + r.x1) / 2.0
             cy = (r.y0 + r.y1) / 2.0
             mat = get_rotation_matrix(cx, cy, rot)
-            annot = page.add_highlight_annot(quads=r.quad * mat)
+            highlight_tools.add(page, [r.quad * mat], color)
         else:
-            annot = page.add_highlight_annot(r)
-        annot.set_colors(stroke=color)
-        annot.update()
+            highlight_tools.add(page, [r.quad], color)
         invalidate_page_cache(doc, page_index)
         return True, None
     except Exception as e:

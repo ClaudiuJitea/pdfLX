@@ -78,7 +78,7 @@ Download `pdflx_<version>_all.deb` from the
 [latest release](https://github.com/ClaudiuJitea/pdfLX/releases/latest) and install it:
 
 ```sh
-sudo apt install ./pdflx_0.4.2_all.deb
+sudo apt install ./pdflx_0.4.3_all.deb
 ```
 
 This installs the **pdfLX** launcher and the `pdflx-cli` command. Requirements: Ubuntu

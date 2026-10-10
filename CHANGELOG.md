@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.3 — 2026-10-10
+
+- New highlight eraser tool: click a highlight to delete it, or drag across text to
+  erase only part of it. It works the same in edit and view mode, on text highlights
+  and freehand marker strokes, and uses a cursor matching its toolbar icon.
+- The highlighter in view mode now draws freehand marker strokes like in edit mode,
+  and highlights made from selected text use the same flat, translucent marker look.
+- Right-clicking a highlight offers the same menu in edit and view mode: highlight,
+  remove highlight from the selection, change its colour, or delete it.
+- Long stamp text now wraps onto two lines instead of shrinking until unreadable;
+  stamp text is limited to 40 characters and the details line to 48.
+- Sticky notes can be dragged to a new position in edit and view mode; a plain click
+  still opens them.
+- The test suite can run on an off-screen display (`tests/run-headless.sh`).
+
 ## 0.4.2 — 2026-10-09
 
 - Clicking an element to select it no longer moves it: a drag now starts only after the
