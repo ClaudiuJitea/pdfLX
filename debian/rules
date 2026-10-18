@@ -31,7 +31,7 @@ override_dh_install:
 	chmod 755 $(BIN_DIR)/pdflx-cli
 
 	install -d $(PKGDDIR)/usr/share/applications
-	install -m 644 debian/pdflx.desktop $(PKGDDIR)/usr/share/applications/
+	install -m 644 pdflx.desktop $(PKGDDIR)/usr/share/applications/
 
 	install -d $(ICON_INSTALL_DIR)
 	install -m 644 $(ICON_SOURCE_PATH) $(ICON_INSTALL_DIR)/$(ICON_NAME).svg

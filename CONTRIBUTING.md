@@ -1,7 +1,7 @@
 # Contributing to pdfLX
 
 Use Python 3.10 or newer with GTK 4, libadwaita, PyGObject, Cairo, PyMuPDF,
-numpy, and pdf2docx. Run the app with `python run-editor.py`.
+numpy, and pdf2docx. Run the app with `python3 run_pdflx.py`.
 
 Keep changes focused, describe the resulting behavior, and verify relevant
 editing and export workflows. UI changes should be checked with both light

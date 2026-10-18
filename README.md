@@ -78,7 +78,7 @@ Download `pdflx_<version>_all.deb` from the
 [latest release](https://github.com/ClaudiuJitea/pdfLX/releases/latest) and install it:
 
 ```sh
-sudo apt install ./pdflx_0.4.6_all.deb
+sudo apt install ./pdflx_0.4.7_all.deb
 ```
 
 This installs the **pdfLX** launcher and the `pdflx-cli` command. Requirements: Ubuntu
@@ -113,14 +113,6 @@ cd pdfLX
 python3 -m venv --system-site-packages .venv
 .venv/bin/pip install -e .
 .venv/bin/pdflx
-```
-
-Or with conda:
-
-```sh
-conda env create -f environment.yml
-conda activate pdfLX
-python run-editor.py
 ```
 
 ### Optional extras
@@ -164,8 +156,7 @@ pdflx-cli --help
 ./build-appimage.sh       # pdflx-<arch>.AppImage
 ```
 
-`org.pdflx.Editor.json` is the Flatpak manifest, and `debian/` contains the Debian
-packaging.
+`debian/` contains the Debian packaging.
 
 ## Development
 

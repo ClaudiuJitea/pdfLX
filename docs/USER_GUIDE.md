@@ -370,8 +370,7 @@ pdf2docx convert input.pdf output.docx
 ## Build
 
 `build-appimage.sh` builds the AppImage for the current architecture.
-`org.pdflx.Editor.json` is the Flatpak manifest, and `debian/` contains
-Debian packaging definitions.
+`debian/` contains the Debian packaging definitions.
 
 Build an installable Debian/Ubuntu package and standalone icons with:
 

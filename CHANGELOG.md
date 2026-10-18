@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.7 — 2026-10-18
+
+- Repository cleanup: removed internal planning notes, the unused PyInstaller
+  spec, Flatpak manifest and conda environment, a duplicate launcher script and
+  desktop file, and unused icons and screenshots. The AppImage and .deb packages
+  are unchanged apart from the unused icons.
+
 ## 0.4.6 — 2026-10-18
 
 - pdfLX is now English-only. The partial French, German, Spanish, Italian,

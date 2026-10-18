@@ -1,3 +1,9 @@
+pdflx (0.4.7) noble; urgency=medium
+
+  * Repository cleanup; the package installs the shared pdflx.desktop file.
+
+ -- pdfLX contributors <pdflx@localhost>  Sun, 18 Oct 2026 12:00:00 +0200
+
 pdflx (0.4.6) noble; urgency=medium
 
   * English-only interface; removed the incomplete translations and the
