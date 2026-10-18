@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.5 — 2026-10-18
+
+- The Forms toolbar menu is simpler: Build & Fill Forms, then Flatten Form Fields
+  set apart below a separator. Creating a single field with every option is still
+  available from the Tools list in the Build & Fill panel.
+
 ## 0.4.4 — 2026-10-10
 
 - Tables move smoothly and can be resized freely from any of eight handles

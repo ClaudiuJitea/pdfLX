@@ -773,9 +773,6 @@ class DocumentToolsController:
         dialog.message.set_text(_("tool_crop_hint"))
         dialog.present()
 
-    def create_field(self):
-        return self.window.form_tools.create_field()
-
     def flatten(self):
         if not self.editable():
             return

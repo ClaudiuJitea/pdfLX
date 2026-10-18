@@ -531,7 +531,6 @@ STRINGS_EN = {
     'submit_retry': 'Try Again',
     'submit_mail_subject': 'Form submission',
     'qf_title': 'Add fields',
-    'tool_create_field_tip': 'Create one field with every option set in a dialog first.',
     'tool_fill_forms_tip': 'Add fields to build a form, or list, fill and edit this document’s fields.',
     'tool_flatten_tip': 'Turn form fields into ordinary page content.',
     'qf_open_hint': 'Type a label, pick a field type, then drag or click on the page.',

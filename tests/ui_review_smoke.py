@@ -103,9 +103,10 @@ def forms_and_stamp():
     actions=[]
     child=forms.get_first_child()
     while child:
-        actions.append(child.get_action_name())
+        if isinstance(child,Gtk.Button):
+            actions.append(child.get_action_name())
         child=child.get_next_sibling()
-    assert actions==['win.form_fields','win.create_field','win.flatten_forms']
+    assert actions==['win.form_fields','win.flatten_forms']
     assert window.stamp_tool_button.get_visible()
     shape_menu = window.shapes_tool_button.get_popover()
     for button in (window.add_rectangle_tool_button, window.add_ellipse_tool_button,

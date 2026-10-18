@@ -1622,11 +1622,17 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         forms_popover = Gtk.Popover(position=Gtk.PositionType.RIGHT)
         forms_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4,
                             margin_top=8, margin_bottom=8, margin_start=8, margin_end=8)
-        for action, key, icon in (
+        # Single-field creation lives in the Build & Fill panel; flattening is
+        # the one-way finishing step, so it sits apart below a separator.
+        for entry in (
             ('form_fields', 'tool_fill_forms', 'editor-match-style-symbolic'),
-            ('create_field', 'tool_create_field', 'editor-form-symbolic'),
+            None,
             ('flatten_forms', 'tool_flatten', 'editor-flatten-symbolic'),
         ):
+            if entry is None:
+                forms_box.append(Gtk.Separator(margin_top=2, margin_bottom=2))
+                continue
+            action, key, icon = entry
             button = Gtk.Button(action_name=f'win.{action}', tooltip_text=_(key + '_tip'))
             button.add_css_class('flat')
             row = Gtk.Box(spacing=10)
