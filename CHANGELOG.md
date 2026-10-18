@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.4.6 — 2026-10-18
+
+- pdfLX is now English-only. The partial French, German, Spanish, Italian,
+  Russian and Turkish interface translations (which had no language picker)
+  and the translated README stubs were removed.
+
 ## 0.4.5 — 2026-10-18
 
 - The Forms toolbar menu is simpler: Build & Fill Forms, then Flatten Form Fields

@@ -51,23 +51,11 @@ class PdfEditorApplication(Adw.Application):
 
 def main():
     """Run the Adw application."""
-    import os, locale, logging
+    import os, logging
     # PDFLX_DEBUG=1 enables diagnostic logging; the default stays quiet.
     logging.basicConfig(level=logging.DEBUG if os.environ.get("PDFLX_DEBUG") else logging.WARNING,
                         format="%(levelname)s %(name)s: %(message)s")
     logging.getLogger("pyhanko").setLevel(logging.ERROR)
-    from .i18n import get_language
-    lang = get_language()
-    if lang == "tr":
-        os.environ["LANGUAGE"] = "tr_TR:tr"
-        os.environ["LC_MESSAGES"] = "tr_TR.UTF-8"
-        try:
-            locale.setlocale(locale.LC_MESSAGES, "tr_TR.UTF-8")
-        except Exception:
-            try:
-                locale.setlocale(locale.LC_MESSAGES, "tr")
-            except Exception:
-                pass
 
     GLib.set_prgname("pdflx")
     GLib.set_application_name("pdfLX")
