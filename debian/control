@@ -10,7 +10,7 @@ Rules-Requires-Root: no
 Package: pdflx
 Architecture: all
 Depends: ${misc:Depends},
-         python3 (>= 3.10),
+         python3 (>= 3.11),
          python3-venv,
          python3-pip,
          python3-gi,

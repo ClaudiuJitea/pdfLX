@@ -47,7 +47,7 @@ if [ "$OFFLINE" -eq 1 ]; then
         # shellcheck disable=SC2086
         python3 -m pip download --quiet --only-binary=:all: --implementation cp --python-version "$py" \
             $PLATFORMS --dest "$STAGE/opt/pdflx/wheels" \
-            'PyMuPDF>=1.26.0' numpy Pillow 'pdf2docx>=0.5.13' 'pyHanko>=0.25'
+            'PyMuPDF>=2.0,<3' numpy Pillow 'pdf2docx>=0.5.13' 'pyHanko>=0.25'
     done
     SUFFIX="_offline"
 fi

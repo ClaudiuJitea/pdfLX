@@ -526,7 +526,8 @@ def create_form_field(doc,page_number,name,kind,rect,choices=(),required=False,*
             if value not in exports and not (kind=='combo' and widget.field_flags&fitz.PDF_CH_FIELD_IS_EDIT):
                 raise ValueError('Choose a listed initial value.')
             widget.field_value=value
-    page.add_widget(widget)
+    from .form_tree import add_widget
+    add_widget(page,widget)
     xref=next(field.xref for field in page.widgets() if field.field_name==name)
     from .form_appearance import write_values,refresh_appearance
     if multi_value is not None:
@@ -572,9 +573,9 @@ def edit_form_field(doc,page_number,xref,name,required=False,max_length=0,rect=N
         from .form_properties import apply_options
         apply_options(widget,options)
         flags=(widget.field_flags|fitz.PDF_FIELD_IS_REQUIRED) if required else (widget.field_flags&~fitz.PDF_FIELD_IS_REQUIRED)
-        parent_type,parent=doc.xref_get_key(xref,'Parent')
-        target=int(parent.split()[0]) if parent_type=='xref' else xref
-        doc.xref_set_key(target,'T',fitz.get_pdf_str(name))
+        from .form_tree import owning_field,partial_name
+        target=owning_field(doc,xref)
+        doc.xref_set_key(target,'T',fitz.get_pdf_str(partial_name(doc,target,name)))
         doc.xref_set_key(target,'Ff',str(flags))
         if rect is not None:
             native=widget.rect*~page.transformation_matrix
@@ -602,6 +603,8 @@ def edit_form_field(doc,page_number,xref,name,required=False,max_length=0,rect=N
     from .form_appearance import is_multi_select,read_values,write_values,refresh_appearance
     selected=read_values(doc,xref) if is_multi_select(widget) else None
     widget.update()
+    from .form_tree import write_field_keys
+    write_field_keys(doc,widget,name)
     if widget.field_type==fitz.PDF_WIDGET_TYPE_BUTTON:
         from .form_buttons import configure
         configure(doc,xref,options)

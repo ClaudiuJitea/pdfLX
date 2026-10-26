@@ -226,7 +226,7 @@ def export_text(doc, pages, text_format, sort=True, progress=None, cancel=None):
 def _page_markdown(page):
     """Markdown approximation: font-size headings, paragraphs, and detected tables."""
     try:
-        tables = list(page.find_tables())
+        tables = list(page.find_tables(use_layout=False))
     except Exception:
         tables = []
     table_rects = [fitz.Rect(t.bbox) for t in tables]
@@ -265,9 +265,15 @@ def export_tables(doc, pages, table_format='markdown', strategy='lines', progres
     """Export detected tables as Markdown, JSON, or a ZIP of CSV files (bytes)."""
     import csv
     found = []
+    # Tables reach their page through a weak reference, so keep the pages alive.
+    loaded = []
     for index, number in enumerate(pages):
         check_cancel(cancel)
-        for table_index, table in enumerate(doc[number].find_tables(strategy=strategy)):
+        page = doc[number]
+        loaded.append(page)
+        # use_layout=False keeps line-based detection; PyMuPDF 2's layout model
+        # otherwise replaces ruled grids with its own guess.
+        for table_index, table in enumerate(page.find_tables(strategy=strategy, use_layout=False)):
             found.append((number, table_index, table))
         report(progress, index + 1, len(pages))
     if not found:

@@ -24,6 +24,7 @@ class PdfEditorApplication(Adw.Application):
         """Activate the main application window."""
         if not self.window:
             self.window = PdfEditorWindow(application=self)
+            self.window.maximize()
         self.window.present()
 
     def do_open(self, files, n_files, hint):

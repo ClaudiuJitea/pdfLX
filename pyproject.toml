@@ -9,9 +9,9 @@ readme = "README.md"
 license = "GPL-3.0-or-later"
 license-files = ["LICENSE"]
 dynamic = ["version"]
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 dependencies = [
-    "PyMuPDF>=1.26.0",
+    "PyMuPDF>=2.0,<3",
     "numpy",
     "Pillow",
     "pygobject",

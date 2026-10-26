@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.8 — 2026-10-26
+
+- Moved to PyMuPDF 2.0 (MuPDF 1.28.5). pdfLX now needs Python 3.11 or newer;
+  the AppImage bundles Python 3.12.
+- The window opens maximized, and it can now be maximized on short screens
+  (for example 1366×768 laptops or 125% scaling): the tool column scrolls
+  instead of forcing a 921 px minimum window height.
+- Form fields from other editors, where the field and its on-page widget are
+  separate objects, are now edited correctly: renaming no longer creates a
+  nested "Old.New" field, and required, read-only, character limit, tooltip
+  and choice changes are kept. The same applies to grouped fields and to
+  fields shown in several places.
+- Make Rotation Permanent keeps highlights, ink, free text and link areas in
+  place.
+- Table export keeps detecting tables from their ruled lines.
+- The offline .deb packages are larger (about 300 MB) because PyMuPDF 2
+  installs its layout analysis engine.
+
 ## 0.4.7 — 2026-10-18
 
 - Repository cleanup: removed internal planning notes, the unused PyInstaller

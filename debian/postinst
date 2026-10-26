@@ -13,7 +13,7 @@ case "$1" in
         # The venv sees system packages (for GTK). pip would report conflicts with
         # unrelated system packages (e.g. python3-openssl pinning an older
         # cryptography); pdfLX's own copies stay inside this venv, so skip that noise.
-        REQUIREMENTS="PyMuPDF>=1.26.0 numpy Pillow pdf2docx>=0.5.13 pyHanko>=0.25"
+        REQUIREMENTS="PyMuPDF>=2.0,<3 numpy Pillow pdf2docx>=0.5.13 pyHanko>=0.25"
         WHEELS="${INSTALL_DIR}/wheels"
         installed=0
         if [ -d "${WHEELS}" ]; then

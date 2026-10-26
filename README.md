@@ -13,7 +13,7 @@ and print or export — all locally, with no cloud services.
 [![License: GPL v3+](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Linux-informational)
 ![GTK 4 + libadwaita](https://img.shields.io/badge/GTK%204-libadwaita-4a86cf)
-![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-3776ab)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)
 
 [Download](#installation) · [Features](#features) · [Screenshots](#screenshots) · [User guide](docs/USER_GUIDE.md) · [Changelog](CHANGELOG.md)
 
@@ -78,7 +78,7 @@ Download `pdflx_<version>_all.deb` from the
 [latest release](https://github.com/ClaudiuJitea/pdfLX/releases/latest) and install it:
 
 ```sh
-sudo apt install ./pdflx_0.4.7_all.deb
+sudo apt install ./pdflx_0.4.8_all.deb
 ```
 
 This installs the **pdfLX** launcher and the `pdflx-cli` command. Requirements: Ubuntu
@@ -87,7 +87,7 @@ dependencies; the installer downloads the Python libraries (PyMuPDF, pdf2docx, p
 into `/opt/pdflx/.venv`, so internet access is needed during installation.
 
 No internet on the target computer? Use `pdflx_<version>_offline_amd64.deb` (or
-`_offline_arm64.deb` for ARM) instead: it includes the Python libraries (about 170 MB) and
+`_offline_arm64.deb` for ARM) instead: it includes the Python libraries (about 300 MB) and
 installs without a network connection.
 
 ### AppImage (any Linux distribution)
@@ -104,7 +104,7 @@ Everything is bundled, so nothing else needs to be installed.
 
 ### From source
 
-You need Python 3.10+, GTK 4, libadwaita 1.5+, and PyGObject. On Ubuntu/Debian:
+You need Python 3.11+, GTK 4, libadwaita 1.5+, and PyGObject. On Ubuntu/Debian:
 
 ```sh
 sudo apt install python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 python3-venv

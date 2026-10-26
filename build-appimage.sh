@@ -28,14 +28,15 @@ esac
 rm -rf AppDir build_tmp
 mkdir -p AppDir/usr build_tmp
 
-echo "--- Downloading standalone Python 3.10 for $PYTHON_ARCH ---"
-curl -L -s "https://github.com/indygreg/python-build-standalone/releases/download/20240107/cpython-3.10.13+20240107-${PYTHON_ARCH}-unknown-linux-gnu-install_only.tar.gz" -o build_tmp/python.tar.gz
+echo "--- Downloading standalone Python 3.12 for $PYTHON_ARCH ---"
+# PyMuPDF 2 needs Python 3.11 or newer.
+curl -L -s -f "https://github.com/astral-sh/python-build-standalone/releases/download/20261009/cpython-3.12.15+20261009-${PYTHON_ARCH}-unknown-linux-gnu-install_only.tar.gz" -o build_tmp/python.tar.gz
 tar -xzf build_tmp/python.tar.gz -C AppDir/usr --strip-components=1
 
 echo "--- Installing Python dependencies ---"
 AppDir/usr/bin/python3 -m pip install --upgrade pip
 AppDir/usr/bin/python3 -m pip install pygobject==3.50.0
-AppDir/usr/bin/python3 -m pip install PyMuPDF numpy pdf2docx pyHanko
+AppDir/usr/bin/python3 -m pip install 'PyMuPDF>=2.0,<3' numpy Pillow 'pdf2docx>=0.5.13' 'pyHanko>=0.25'
 AppDir/usr/bin/python3 -m pip install .
 
 echo "--- Configuring application entry point ---"

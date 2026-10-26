@@ -157,7 +157,8 @@ def export_tables_zip(doc, path):
         raise RuntimeError("Table detection requires a newer PyMuPDF version")
     tables = {}
     for page_index in range(doc.page_count):
-        for table_index, table in enumerate(doc[page_index].find_tables().tables, 1):
+        page = doc[page_index]
+        for table_index, table in enumerate(page.find_tables(use_layout=False).tables, 1):
             buffer = io.StringIO()
             writer = csv.writer(buffer)
             writer.writerows(table.extract())

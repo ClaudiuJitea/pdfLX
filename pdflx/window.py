@@ -1134,7 +1134,13 @@ class PdfEditorWindow(Adw.ApplicationWindow):
         # Vertical toolbar on the side + dedicated Page Preview sidebar in paned
         self._create_tools_sidebar()
         self.editor_container = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0, vexpand=True, hexpand=True)
-        self.editor_container.append(self.tools_sidebar)
+        # Scroll the tool column on short screens; without this its full height
+        # becomes the window's minimum height and the window cannot be maximized.
+        tools_scroller = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                            vscrollbar_policy=Gtk.PolicyType.AUTOMATIC,
+                                            propagate_natural_width=True, vexpand=True)
+        tools_scroller.set_child(self.tools_sidebar)
+        self.editor_container.append(tools_scroller)
         self.editor_container.append(self.paned)
         self.document_tools = DocumentToolsController(self)
         from .stamp_interaction import StampInteraction

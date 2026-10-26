@@ -1,4 +1,5 @@
 """Native field appearance, behaviour, permissions, validation and undo."""
+import re
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock,patch
@@ -74,8 +75,9 @@ class FormImprovementsTests(unittest.TestCase):
         w.doc.xref_set_key(w.doc.pdf_catalog(),'AcroForm/Fields',fitz.get_pdf_str('broken field list'))
         duplicate_form_field(w.doc,0,x)
         _,roots=w.doc.xref_get_key(w.doc.pdf_catalog(),'AcroForm/Fields')
-        self.assertIn(parent,roots)
-        self.assertNotIn(f'{x} 0 R',roots)
+        refs=[f'{ref} 0 R' for ref in re.findall(r'(\d+)\s+0\s+R',roots)]
+        self.assertIn(parent,refs)
+        self.assertNotIn(f'{x} 0 R',refs)
         self.assertEqual([f['value'] for f in features.list_form_fields(w.doc)],['One','Off','One','Off'])
 
     def test_duplicate_text_settings_values_defaults_and_independent_appearance(self):

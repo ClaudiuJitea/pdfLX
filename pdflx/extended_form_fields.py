@@ -2,6 +2,7 @@
 import re
 import uuid
 import pymupdf as fitz
+from .form_tree import add_widget
 
 
 def create_radio_group(doc,page_number,name,rect,choices,required=False,options=None,value=None):
@@ -26,7 +27,7 @@ def create_radio_group(doc,page_number,name,rect,choices,required=False,options=
         widget.field_value='Off';widget.text_color=(0,0,0);widget.border_color=(.45,.45,.45)
         widget.border_width=1;widget.fill_color=(1,1,1)
         apply_options(widget,options)
-        annot=page.add_widget(widget);xref=annot.xref;refs.append(xref)
+        annot=add_widget(page,widget);xref=annot.xref;refs.append(xref)
         # Native appearance streams include the option label inside the widget.
         appearances={}
         for selected in (False,True):

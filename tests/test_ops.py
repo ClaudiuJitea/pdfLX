@@ -1,6 +1,7 @@
 """Headless regressions for pdflx.ops document operations."""
 import json
 import os
+import re
 import tempfile
 import unittest
 import zipfile
@@ -563,6 +564,93 @@ class FormTests(unittest.TestCase):
 def saved_value(doc, xref):
     kind, value = doc.xref_get_key(xref, 'V')
     return value
+
+
+def split_field_form():
+    """A form whose fields are separate from their widgets, as Acrobat saves them.
+
+    Returns the document and the widget xrefs of Customer, Dept and both Alias widgets.
+    """
+    doc = fitz.open()
+    page = doc.new_page()
+    widgets = []
+
+    def obj(text):
+        xref = doc.get_new_xref()
+        doc.update_object(xref, text)
+        return xref
+
+    def field(text, rects):
+        kids = [obj(f'<</Type/Annot/Subtype/Widget/Rect[{r[0]} {792 - r[3]} {r[2]} {792 - r[1]}]'
+                    f'/P {page.xref} 0 R/F 4>>') for r in rects]
+        parent = obj(text.replace('KIDS', ' '.join(f'{k} 0 R' for k in kids)))
+        for kid in kids:
+            doc.xref_set_key(kid, 'Parent', f'{parent} 0 R')
+        widgets.extend(kids)
+        return parent
+
+    roots = [field('<</FT/Tx/T(Customer)/V(Jane)/MaxLen 30/DA(/Helv 11 Tf 0 g)/Kids[KIDS]>>', [(50, 50, 250, 70)]),
+             field('<</FT/Ch/Ff 131072/T(Dept)/Opt[(Sales)(Engineering)]/V(Sales)/DA(/Helv 11 Tf 0 g)/Kids[KIDS]>>',
+                   [(50, 90, 250, 110)]),
+             field('<</FT/Tx/T(Alias)/V(Same)/DA(/Helv 11 Tf 0 g)/Kids[KIDS]>>', [(50, 130, 250, 150), (50, 160, 250, 180)])]
+    doc.xref_set_key(page.xref, 'Annots', '[' + ' '.join(f'{w} 0 R' for w in widgets) + ']')
+    doc.xref_set_key(doc.pdf_catalog(), 'AcroForm', '<</Fields[' + ' '.join(f'{r} 0 R' for r in roots) + ']>>')
+    return reopen(doc), widgets
+
+
+class SplitFieldTests(unittest.TestCase):
+    """Field-level edits must reach the field object, which PyMuPDF 2 leaves to the caller."""
+
+    def fields(self, doc):
+        from pdflx import document_features
+        return {f['name']: f for f in document_features.list_form_fields(reopen(doc))}
+
+    def test_new_fields_are_single_objects_without_stray_parents(self):
+        from pdflx import document_tools
+        doc = fitz.open()
+        doc.new_page()
+        text = document_tools.create_form_field(doc, 0, 'Name', 'text', (72, 72, 272, 92), value='Ann')
+        document_tools.create_form_field(doc, 0, 'Pick', 'combo', (72, 100, 272, 120), ['A', 'B'], value='B')
+        document_tools.create_form_field(doc, 0, 'Size', 'radio', (72, 130, 272, 190), ['S', 'M'], value='M')
+        self.assertEqual(doc.xref_get_key(text, 'Parent')[0], 'null')
+        self.assertEqual(doc.xref_get_key(text, 'T'), ('string', 'Name'))
+        roots = [int(ref) for ref in re.findall(r'(\d+) 0 R', doc.xref_get_key(doc.pdf_catalog(), 'AcroForm/Fields')[1])]
+        self.assertEqual(sorted(doc.xref_get_key(ref, 'T')[1] for ref in roots), ['Name', 'Pick', 'Size'])
+        self.assertEqual({f['name']: f['value'] for f in self.fields(doc).values()},
+                         {'Name': 'Ann', 'Pick': 'B', 'Size': 'M'})
+
+    def test_edit_split_field_updates_the_field_object(self):
+        from pdflx import document_tools
+        doc, (customer, dept, alias, _) = split_field_form()
+        document_tools.edit_form_field(doc, 0, customer, 'Client', True, 10, options={'tooltip': 'Who', 'readonly': True})
+        document_tools.edit_form_field(doc, 0, dept, 'Dept', False, choices=['Sales', 'Ops'])
+        fields = self.fields(doc)
+        self.assertEqual(sorted(fields), ['Alias', 'Client', 'Dept'])
+        client = fields['Client']
+        self.assertEqual((client['value'], client['required'], client['readonly'], client['max_length'], client['tooltip']),
+                         ('Jane', True, True, 10, 'Who'))
+        self.assertEqual(fields['Dept']['choices'], ['Sales', 'Ops'])
+        self.assertEqual(doc.xref_get_key(customer, 'T')[0], 'null')
+
+    def test_edit_one_alias_renames_the_shared_field(self):
+        from pdflx import document_tools, document_features
+        doc, (_, _, alias, other) = split_field_form()
+        document_tools.edit_form_field(doc, 0, alias, 'Shared', True)
+        fields = [f for f in document_features.list_form_fields(reopen(doc)) if f['xref'] in (alias, other)]
+        self.assertEqual([(f['name'], f['required'], f['value']) for f in fields],
+                         [('Shared', True, 'Same'), ('Shared', True, 'Same')])
+
+    def test_edit_grouped_field_keeps_settings(self):
+        from pdflx import document_tools
+        from pdflx.ops import forms
+        doc = fitz.open()
+        doc.new_page()
+        xref = document_tools.create_form_field(doc, 0, 'Street', 'text', (72, 72, 272, 92))
+        forms.group_fields(doc, [xref], 'Address')
+        document_tools.edit_form_field(doc, 0, xref, 'Address.Street', True, 9, options={'font_size': 14})
+        document_tools.edit_form_field(doc, 0, xref, 'Address.Road', True, 9)
+        road = self.fields(doc)['Address.Road']
+        self.assertEqual((road['required'], road['max_length'], road['font_size']), (True, 9, 14))
 
 
 class GraphicsAndAuthoringTests(unittest.TestCase):

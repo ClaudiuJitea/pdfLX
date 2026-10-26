@@ -1,6 +1,6 @@
 # Contributing to pdfLX
 
-Use Python 3.10 or newer with GTK 4, libadwaita, PyGObject, Cairo, PyMuPDF,
+Use Python 3.11 or newer with GTK 4, libadwaita, PyGObject, Cairo, PyMuPDF,
 numpy, and pdf2docx. Run the app with `python3 run_pdflx.py`.
 
 Keep changes focused, describe the resulting behavior, and verify relevant

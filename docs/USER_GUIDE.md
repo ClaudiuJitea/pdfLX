@@ -381,7 +381,7 @@ sudo apt install ./dist/pdflx_0.4_all.deb
 
 The package installs the pdfLX launcher, the `pdflx-cli` command-line tool, and
 PNG/SVG desktop icons. Installation requires internet access to set up the PDF,
-DOCX export, and signing libraries in `/opt/pdflx/.venv`. Python 3.10 or later,
+DOCX export, and signing libraries in `/opt/pdflx/.venv`. Python 3.11 or later,
 GTK 4, and libadwaita 1.5 or later (Ubuntu 24.04+, Debian 13+) are required; APT
 installs these system dependencies automatically.
 
