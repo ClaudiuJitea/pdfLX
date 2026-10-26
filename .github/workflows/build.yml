@@ -18,10 +18,10 @@ jobs:
         include:
           - arch: x86_64
             deb_arch: amd64
-            runner: ubuntu-22.04
+            runner: ubuntu-24.04
           - arch: aarch64
             deb_arch: arm64
-            runner: ubuntu-22.04-arm
+            runner: ubuntu-24.04-arm
 
     runs-on: ${{ matrix.runner }}
 
@@ -99,7 +99,7 @@ jobs:
             echo
             echo "| File | For |"
             echo "|---|---|"
-            echo "| \`pdflx-x86_64.AppImage\` / \`pdflx-aarch64.AppImage\` | Any Linux distribution, nothing to install: \`chmod +x\` and run. |"
+            echo "| \`pdflx-x86_64.AppImage\` / \`pdflx-aarch64.AppImage\` | Linux distributions from 2024 on (glibc 2.39+), nothing to install: \`chmod +x\` and run. |"
             echo "| \`pdflx_${version}_all.deb\` | Ubuntu 24.04+ / Debian 13+, small download; Python libraries are downloaded during installation. |"
             echo "| \`pdflx_${version}_offline_amd64.deb\` / \`pdflx_${version}_offline_arm64.deb\` | Ubuntu 24.04+ / Debian 13+ without internet access: all Python libraries are included. |"
             echo

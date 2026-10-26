@@ -15,6 +15,9 @@
 - Make Rotation Permanent keeps highlights, ink, free text and link areas in
   place.
 - Table export keeps detecting tables from their ruled lines.
+- The AppImages start again: the launcher no longer shadows the pdflx
+  package, and they are built on Ubuntu 24.04 so they bundle libadwaita 1.5.
+  They now need a distribution from 2024 or later (glibc 2.39+).
 - The offline .deb packages are larger (about 300 MB) because PyMuPDF 2
   installs its layout analysis engine.
 

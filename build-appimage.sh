@@ -40,7 +40,9 @@ AppDir/usr/bin/python3 -m pip install 'PyMuPDF>=2.0,<3' numpy Pillow 'pdf2docx>=
 AppDir/usr/bin/python3 -m pip install .
 
 echo "--- Configuring application entry point ---"
-cat << 'EOF' > AppDir/usr/bin/pdflx.py
+# Not pdflx.py: Python puts the script's folder first on sys.path, so that name
+# would shadow the pdflx package.
+cat << 'EOF' > AppDir/usr/bin/pdflx-run.py
 import sys
 from pdflx.main import main
 sys.exit(main())
@@ -53,7 +55,7 @@ SELF_DIR="$(dirname "$(readlink -f "$0")")"
 export GDK_PIXBUF_MODULEDIR="$SELF_DIR/../lib/gdk-pixbuf-2.0/2.10.0/loaders"
 export GDK_PIXBUF_MODULE_FILE="$SELF_DIR/../lib/gdk-pixbuf-2.0/2.10.0/loaders.cache"
 export LD_LIBRARY_PATH="$SELF_DIR/../lib:$SELF_DIR/../lib/gdk-pixbuf-2.0/2.10.0/loaders:$LD_LIBRARY_PATH"
-exec "$SELF_DIR/python3" "$SELF_DIR/pdflx.py" "$@"
+exec "$SELF_DIR/python3" "$SELF_DIR/pdflx-run.py" "$@"
 EOF
 chmod +x AppDir/usr/bin/pdflx
 

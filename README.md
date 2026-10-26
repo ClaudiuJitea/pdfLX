@@ -90,7 +90,7 @@ No internet on the target computer? Use `pdflx_<version>_offline_amd64.deb` (or
 `_offline_arm64.deb` for ARM) instead: it includes the Python libraries (about 300 MB) and
 installs without a network connection.
 
-### AppImage (any Linux distribution)
+### AppImage (most Linux distributions)
 
 Download `pdflx-x86_64.AppImage` (or `pdflx-aarch64.AppImage` for ARM) from the
 [latest release](https://github.com/ClaudiuJitea/pdfLX/releases/latest), then:
@@ -100,7 +100,8 @@ chmod +x pdflx-x86_64.AppImage
 ./pdflx-x86_64.AppImage
 ```
 
-Everything is bundled, so nothing else needs to be installed.
+Everything is bundled, so nothing else needs to be installed. The AppImage needs a
+distribution from 2024 or later (glibc 2.39+, for example Ubuntu 24.04 or Fedora 40).
 
 ### From source
 
